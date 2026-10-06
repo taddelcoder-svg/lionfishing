@@ -1,7 +1,7 @@
 # Render-Blueprint: ein Docker-Webdienst. Das Passwort sollte dasselbe sein wie bei den anderen Spielen.
 services:
   - type: web
-    name: fischfieber
+    name: lionfishing
     runtime: docker
     plan: free
     healthCheckPath: /healthz

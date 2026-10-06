@@ -5,7 +5,8 @@ const T = THREE, Welt = FF.Welt, M = FF.Modelle, Ton = FF.Ton;
 const $ = id => document.getElementById(id);
 const zufall = (a, b) => a + Math.random() * (b - a);
 const klemm = (x, a, b) => Math.max(a, Math.min(b, x));
-const istTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+// Hauptzeiger ist ein Finger (Handy, iPad). Windows-Laptops mit Touchscreen behalten Maus-Steuerung.
+const istTouch = matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints > 1 && /iPad|Macintosh/.test(navigator.userAgent) && !matchMedia('(pointer: fine)').matches);
 if (istTouch) document.body.classList.add('touch');
 
 /* ================= Spielstand ================= */
@@ -53,7 +54,15 @@ sonne.castShadow = true; sonne.shadow.mapSize.set(2048, 2048);
 Object.assign(sonne.shadow.camera, { left:-40, right:40, top:40, bottom:-40, near:1, far:160 });
 sonne.shadow.bias = -.0006;
 szene.add(sonne); szene.add(sonne.target);
-addEventListener('resize', () => { kamera.aspect = innerWidth / innerHeight; kamera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false); });
+// Im Hochformat das Sichtfeld weiten, sonst sieht man seitlich fast nichts
+function sichtAnpassen() {
+  kamera.aspect = innerWidth / innerHeight;
+  kamera.fov = Math.min(100, Math.max(72, 2 * Math.atan(Math.tan(32 * Math.PI / 180) / kamera.aspect) * 180 / Math.PI));
+  kamera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight, false);
+}
+sichtAnpassen();
+addEventListener('resize', sichtAnpassen);
 
 /* ================= Spieler ================= */
 const P = { pos:new T.Vector3(), vel:new T.Vector3(), yaw:0, pitch:0, amBoden:true, slot:0, cd:0, nachladen:0, mag:{}, schwung:0, rueck:0, bob:0, wackeln:0, ruhe:0, unverw:0, imWasser:false };
@@ -237,6 +246,12 @@ if (istTouch) {
   knopfDruck('tPause', () => pause());
 }
 
+// Vollbild auf Tablets/Android (iPhone kann das nicht – dort hilft „Zum Home-Bildschirm“)
+function vollbild() {
+  const el = document.documentElement, f = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!f || document.fullscreenElement || document.webkitFullscreenElement) return;
+  try { const p = f.call(el); if (p && p.catch) p.catch(() => {}); } catch (e) { /* egal */ }
+}
 // Maus einfangen (gibt in neueren Browsern ein Promise zurück, das ohne Klick scheitert)
 function sperren() { try { const p = cv.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* egal */ } }
 
@@ -300,7 +315,8 @@ function handUpdate(dt) {
   if (!hand) return;
   P.schwung = Math.max(0, P.schwung - dt * 3.2); P.rueck = Math.max(0, P.rueck - dt * 6);
   const bob = Math.hypot(P.vel.x, P.vel.z) > .5 && P.amBoden ? Math.sin(P.bob * 2) : 0;
-  hand.position.set(.3 + bob * .012, -.3 + Math.abs(bob) * .012 - P.rueck * .03, -.5 + P.rueck * .12);
+  const hs = kamera.aspect < 1 ? .7 : 1; hand.scale.setScalar(hs);
+  hand.position.set((.3 + bob * .012) * hs, (-.3 + Math.abs(bob) * .012 - P.rueck * .03) * hs, (-.5 + P.rueck * .12) * hs);
   hand.rotation.set(P.rueck * .25, 0, 0);
   if (handId === 'rute') {
     let rx = 0;
@@ -1167,7 +1183,7 @@ function weiter() {
   $('hud').style.display = 'block';
   $('touch').style.pointerEvents = '';
   laeuft = true; In.haupt = false; In.hauptNeu = false;
-  if (!istTouch) sperren();
+  if (!istTouch) sperren(); else vollbild();
   hotbarZeichnen();
 }
 function pause() {

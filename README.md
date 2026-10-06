@@ -43,4 +43,4 @@ fischfieber.geld(1000)
 
 ## Deploy
 
-Render-Blueprint `render.yaml` (Docker, Dienst `fischfieber`), Umgebungsvariable `ZUGANG_PASSWORT` setzen.
+Render-Blueprint `render.yaml` (Docker, Dienst `lionfishing`, GitHub `taddelcoder-svg/lionfishing`), Umgebungsvariable `ZUGANG_PASSWORT` setzen.
