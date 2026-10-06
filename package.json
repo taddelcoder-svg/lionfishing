@@ -1,0 +1,13 @@
+{
+  "name": "fischfieber",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fischfieber – 3D-Chaos-Angeln im Browser: gestrandet auf einer Insel, angeln, kämpfen, zocken, heimkehren",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

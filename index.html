@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0b2b45">
+<title>Fischfieber</title>
+<style>
+  @font-face{font-family:Barlow;src:url(/vendor/barlow-semi-condensed-600.woff2) format('woff2');font-weight:600;font-display:swap}
+  @font-face{font-family:Barlow;src:url(/vendor/barlow-semi-condensed-700.woff2) format('woff2');font-weight:700;font-display:swap}
+  @font-face{font-family:Barlow;src:url(/vendor/barlow-semi-condensed-800.woff2) format('woff2');font-weight:800;font-display:swap}
+  :root{--gelb:#ffcc33;--rot:#ff5a4e;--gruen:#3ccf7a;--blau:#2a8fd6;--tinte:#0b2b45;--panel:rgba(10,32,52,.94);--rand:#2f6f9e}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b2b45;color:#fff;font-family:Barlow,system-ui,sans-serif;font-weight:600;user-select:none;-webkit-user-select:none;touch-action:none}
+  canvas#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .ui{position:fixed;pointer-events:none;z-index:5}
+  button{font:inherit;font-weight:700;border:0;border-radius:10px;padding:9px 14px;background:var(--gelb);color:var(--tinte);cursor:pointer;box-shadow:0 3px 0 #b88a12;pointer-events:auto}
+  button:active{transform:translateY(2px);box-shadow:0 1px 0 #b88a12}
+  button:disabled{background:#56606b;color:#c9d1d9;box-shadow:0 3px 0 #333b44;cursor:default}
+  button.zweit{background:#2f6f9e;color:#fff;box-shadow:0 3px 0 #1b4566}
+  button.gefahr{background:var(--rot);color:#fff;box-shadow:0 3px 0 #a5302a}
+  button.gruen{background:var(--gruen);color:#06301a;box-shadow:0 3px 0 #1f8a4d}
+
+  /* HUD */
+  #hud{inset:0;display:none}
+  #oben{position:absolute;top:12px;left:12px;display:flex;flex-direction:column;gap:6px}
+  .chip{background:rgba(6,24,40,.7);border-radius:10px;padding:6px 12px;font-size:20px;font-weight:800;display:flex;align-items:center;gap:8px;width:max-content}
+  #geld{color:var(--gelb)} #geld.minus{color:var(--rot)}
+  #hpRahmen{width:200px;height:14px;background:rgba(6,24,40,.7);border-radius:8px;overflow:hidden;border:2px solid rgba(255,255,255,.25)}
+  #hpBalken{height:100%;width:100%;background:linear-gradient(90deg,#ff5a4e,#ff9a4e);transition:width .15s}
+  #inselName{position:absolute;top:12px;right:12px;text-align:right;font-size:15px;opacity:.85}
+  #fadenkreuz{position:absolute;left:50%;top:50%;width:22px;height:22px;transform:translate(-50%,-50%)}
+  #fadenkreuz:before,#fadenkreuz:after{content:"";position:absolute;background:#fff;box-shadow:0 0 2px #000}
+  #fadenkreuz:before{left:10px;top:3px;width:2px;height:16px}
+  #fadenkreuz:after{top:10px;left:3px;height:2px;width:16px}
+  #hinweis{position:absolute;left:50%;top:60%;transform:translateX(-50%);background:rgba(6,24,40,.78);padding:8px 16px;border-radius:10px;font-size:19px;display:none;white-space:nowrap}
+  #hinweis b{color:var(--gelb)}
+  #angel{position:absolute;left:50%;bottom:120px;transform:translateX(-50%);text-align:center;display:none;width:min(420px,86vw)}
+  #angelText{font-size:22px;font-weight:800;text-shadow:0 2px 4px rgba(0,0,0,.6);margin-bottom:6px}
+  #angelText.biss{color:var(--gelb);font-size:42px;animation:puls .25s infinite alternate}
+  @keyframes puls{from{transform:scale(1)}to{transform:scale(1.12)}}
+  .leiste{height:16px;background:rgba(6,24,40,.75);border-radius:9px;overflow:hidden;border:2px solid rgba(255,255,255,.3);margin-top:5px}
+  .leiste>div{height:100%;width:0}
+  #spannung>div{background:linear-gradient(90deg,#3ccf7a,#ffcc33 60%,#ff5a4e)}
+  #ladung>div{background:linear-gradient(90deg,#9fd8ff,#ffcc33)}
+  #entf{font-size:15px;opacity:.85;margin-top:4px}
+  #hotbar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:6px}
+  .slot{width:64px;height:64px;border-radius:12px;background:rgba(6,24,40,.72);border:2px solid rgba(255,255,255,.18);display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:26px;position:relative;pointer-events:auto;cursor:pointer}
+  .slot.an{border-color:var(--gelb);background:rgba(40,60,20,.75);transform:translateY(-4px)}
+  .slot small{font-size:11px;opacity:.85;font-weight:700}
+  .slot i{position:absolute;top:2px;left:6px;font-size:11px;font-style:normal;opacity:.6}
+  #munition{position:absolute;right:16px;bottom:18px;font-size:30px;font-weight:800;text-shadow:0 2px 4px rgba(0,0,0,.6)}
+  #meldungen{position:absolute;top:70px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:4px}
+  .meldung{background:rgba(6,24,40,.8);padding:6px 14px;border-radius:9px;font-size:18px;animation:rein .2s ease-out;transition:opacity .4s}
+  @keyframes rein{from{transform:translateY(-8px);opacity:0}}
+  #ansage{position:absolute;top:32%;left:0;right:0;text-align:center;font-size:clamp(34px,7vw,72px);font-weight:800;color:var(--gelb);text-shadow:0 4px 0 #7a4d00,0 8px 20px rgba(0,0,0,.5);opacity:0;transition:opacity .4s}
+  #ansage small{display:block;font-size:.4em;color:#fff;text-shadow:0 2px 6px rgba(0,0,0,.7)}
+  #bossbar{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:min(520px,60vw);display:none;text-align:center}
+  #bossbar .name{font-size:20px;font-weight:800;color:#ffb3ad;text-shadow:0 2px 4px #000}
+  #bossbar .leiste>div{background:linear-gradient(90deg,#b81f1f,#ff5a4e)}
+  #aua{position:fixed;inset:0;pointer-events:none;box-shadow:inset 0 0 160px 40px rgba(255,0,0,.75);opacity:0;transition:opacity .25s;z-index:4}
+  #zahlen{inset:0}
+  .zahl{position:absolute;font-weight:800;font-size:22px;color:#fff;text-shadow:0 2px 0 #000,0 0 6px #000;transform:translate(-50%,-50%);white-space:nowrap}
+  #schwarz{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .8s;z-index:30}
+
+  /* Panels */
+  .huelle{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(3,14,26,.55);z-index:20;padding:16px}
+  .panel{background:var(--panel);border:2px solid var(--rand);border-radius:18px;width:min(720px,100%);max-height:calc(100% - 8px);overflow:auto;padding:18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.5);pointer-events:auto;touch-action:pan-y}
+  .panel h2{margin:0 0 4px;font-size:28px;font-weight:800;color:var(--gelb)}
+  .panel .unter{opacity:.8;margin:0 0 12px}
+  .kopf{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+  .zu{background:transparent;color:#fff;box-shadow:none;font-size:26px;padding:0 6px;line-height:1}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 12px}
+  .tabs button{background:#16405f;color:#fff;box-shadow:none;padding:7px 12px}
+  .tabs button.an{background:var(--gelb);color:var(--tinte)}
+  .zeile{display:flex;align-items:center;gap:12px;padding:9px 10px;border-radius:10px;background:rgba(255,255,255,.05);margin-bottom:6px}
+  .zeile .icon{font-size:28px;width:38px;text-align:center}
+  .zeile .mitte{flex:1;min-width:0}
+  .zeile .mitte b{display:block;font-size:18px}
+  .zeile .mitte span{font-size:14px;opacity:.75}
+  .preis{color:var(--gelb);font-weight:800;white-space:nowrap}
+  .summe{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:20px;font-weight:800}
+  .rede{background:rgba(255,255,255,.07);border-radius:12px;padding:12px 14px;font-size:18px;line-height:1.45;margin-bottom:12px}
+  .rede b{color:var(--gelb)}
+  .knoepfe{display:flex;gap:8px;flex-wrap:wrap}
+  .gitter{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+  .karte{background:rgba(255,255,255,.06);border-radius:12px;padding:10px;text-align:center;border:2px solid transparent}
+  .karte .gross{font-size:34px}
+  .karte.unbekannt{opacity:.45;filter:grayscale(1)}
+  .karte b{display:block}
+  .karte span{font-size:13px;opacity:.8}
+  #menue .panel{text-align:center;width:min(520px,100%)}
+  #titel{font-size:clamp(46px,10vw,88px);font-weight:800;color:var(--gelb);margin:0;line-height:.95;text-shadow:0 5px 0 #b56a00,0 10px 30px rgba(0,0,0,.4);letter-spacing:1px}
+  #menue .knoepfe{flex-direction:column;align-items:stretch;margin-top:18px}
+  #menue button{font-size:20px;padding:12px}
+  .klein{font-size:13px;opacity:.65;margin-top:14px}
+  .klein a{color:#9fd8ff}
+  .tasten{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;text-align:left;font-size:16px;margin:10px 0}
+  .tasten kbd{background:#16405f;border-radius:6px;padding:1px 8px;font-family:inherit;font-weight:800;color:var(--gelb);white-space:nowrap}
+  .einst{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:10px 0;font-size:18px}
+  input[type=range]{width:180px;accent-color:var(--gelb)}
+
+  /* Casino */
+  .casino{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .casino>div{background:rgba(255,255,255,.05);border-radius:14px;padding:12px;text-align:center}
+  .casino h3{margin:0 0 8px;font-size:20px}
+  #radCv{width:100%;max-width:220px;aspect-ratio:1}
+  .walzen{display:flex;justify-content:center;gap:8px;margin:20px 0}
+  .walze{width:62px;height:76px;background:#fff;border-radius:10px;color:#000;font-size:44px;display:flex;align-items:center;justify-content:center;box-shadow:inset 0 -6px 0 rgba(0,0,0,.15)}
+  .einsatz{display:flex;gap:4px;justify-content:center;flex-wrap:wrap;margin:8px 0}
+  .einsatz button{padding:5px 9px;font-size:15px;background:#16405f;color:#fff;box-shadow:none}
+  .einsatz button.an{background:var(--gelb);color:var(--tinte)}
+  #casinoErgebnis{text-align:center;font-size:22px;font-weight:800;min-height:30px;margin-top:10px}
+
+  /* Touch */
+  #touch{position:fixed;inset:0;z-index:3;display:none;touch-action:none}
+  .tknopf{position:absolute;border-radius:50%;background:rgba(6,24,40,.55);border:2px solid rgba(255,255,255,.35);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;text-align:center;font-size:14px;pointer-events:auto}
+  .tknopf.an{background:rgba(255,204,51,.6)}
+  #tHaupt{width:96px;height:96px;right:22px;bottom:110px;font-size:16px}
+  #tSprung{width:64px;height:64px;right:130px;bottom:96px}
+  #tAktion{width:64px;height:64px;right:40px;bottom:222px;display:none;background:rgba(255,204,51,.55)}
+  #tLaden{width:52px;height:52px;right:136px;bottom:176px}
+  #tPause{width:44px;height:44px;right:12px;top:58px;border-radius:12px}
+  #stick{position:absolute;width:120px;height:120px;border-radius:50%;border:2px solid rgba(255,255,255,.3);background:rgba(6,24,40,.3);display:none;transform:translate(-50%,-50%)}
+  #stick div{position:absolute;left:50%;top:50%;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.5);transform:translate(-50%,-50%)}
+  body.touch .slot{width:52px;height:52px;font-size:22px}
+  body.touch #hotbar{bottom:8px;left:auto;right:auto;left:50%}
+  body.touch #angel{bottom:80px;left:10px;transform:none;width:min(52vw,320px);text-align:left}
+  body.touch #angelText{font-size:17px}
+  body.touch #angelText.biss{font-size:30px}
+  body.touch #entf{font-size:13px}
+  body.touch #munition{bottom:auto;top:110px;right:14px;font-size:22px}
+  @media (max-width:640px){.casino{grid-template-columns:1fr}.chip{font-size:17px}#hpRahmen{width:150px}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" class="ui">
+  <div id="oben">
+    <div class="chip"><span>💰</span><span id="geld">0 $</span></div>
+    <div class="chip"><span>🧊</span><span id="kiste">0/6</span></div>
+    <div id="hpRahmen"><div id="hpBalken"></div></div>
+  </div>
+  <div id="inselName"></div>
+  <div id="bossbar"><div class="name" id="bossName"></div><div class="leiste"><div id="bossHp"></div></div></div>
+  <div id="fadenkreuz"></div>
+  <div id="hinweis"></div>
+  <div id="meldungen"></div>
+  <div id="ansage"></div>
+  <div id="angel">
+    <div id="angelText"></div>
+    <div id="ladung" class="leiste"><div></div></div>
+    <div id="spannung" class="leiste"><div></div></div>
+    <div id="entf"></div>
+  </div>
+  <div id="hotbar"></div>
+  <div id="munition"></div>
+</div>
+<div id="zahlen" class="ui"></div>
+<div id="aua"></div>
+
+<div id="touch">
+  <div id="stick"><div></div></div>
+  <div class="tknopf" id="tHaupt">AKTION</div>
+  <div class="tknopf" id="tSprung">⤒</div>
+  <div class="tknopf" id="tAktion">E</div>
+  <div class="tknopf" id="tLaden">↻</div>
+  <div class="tknopf" id="tPause">❚❚</div>
+</div>
+
+<div class="huelle" id="menue"><div class="panel">
+  <h1 id="titel">FISCHFIEBER</h1>
+  <p class="unter" style="margin-top:12px">Gestrandet. Angeln. Kämpfen. Zocken. Heimkehren.</p>
+  <div class="knoepfe" id="menueKnoepfe"></div>
+  <p class="klein">Ein Swimming-Lions-Spiel · <a href="/datenschutz" target="_blank" rel="noopener" style="pointer-events:auto">Datenschutz</a></p>
+</div></div>
+
+<div class="huelle" id="fenster"><div class="panel" id="fensterInhalt"></div></div>
+<div id="schwarz"></div>
+
+<script src="/vendor/three.min.js"></script>
+<script src="/js/daten.js"></script>
+<script src="/js/ton.js"></script>
+<script src="/js/modelle.js"></script>
+<script src="/js/welt.js"></script>
+<script src="/js/spiel.js"></script>
+</body>
+</html>
