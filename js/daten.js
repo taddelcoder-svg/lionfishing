@@ -78,10 +78,10 @@ FF.WESTEN = [ { name:'Keine Weste', schutz:0, preis:0 }, { name:'Rettungsweste',
 /* ---------- Inseln ---------- */
 FF.INSELN = {
   1: { name:'Schiffbruch-Insel', radius:46, seed:1.7, sand:'#e8d6a0', gras:'#6dbb47', gras2:'#4f9a38', fels:'#8a8f94',
-       wasser:'#2a8fd6', tief:'#0e4f8a', himmel:'#7cc4f2', horizont:'#d8f0ff', nebel:'#bfe3f7', sonne:'#fff4dc', palmen:26, felsen:14,
+       wasser:'#2a8fd6', flach:'#3fd3df', tief:'#0b4a86', himmel:'#5fb2ef', horizont:'#d6efff', nebel:'#c9e8f8', sonne:'#fff1d6', hemi:'#e2f3ff', hemiBoden:'#8a7a55', sonneRichtung:[.5, .78, .3], palmen:30, felsen:14,
        quest:{ trophae:'krone', geld:200 } },
   2: { name:'Haifisch-Atoll',    radius:50, seed:4.2, sand:'#f4e2b2', gras:'#3fa66a', gras2:'#2e8754', fels:'#6c6a72',
-       wasser:'#19b3c4', tief:'#0b5d78', himmel:'#f2a66b', horizont:'#ffe0b5', nebel:'#f6cfa6', sonne:'#ffd2a1', palmen:38, felsen:20,
+       wasser:'#19b3c4', flach:'#5fe6d4', tief:'#0a4f73', himmel:'#e9875f', horizont:'#ffd9a8', nebel:'#f7cfa2', sonne:'#ffc27e', hemi:'#ffd6b0', hemiBoden:'#7a5a45', sonneRichtung:[.12, .2, 1], palmen:42, felsen:20,
        quest:{ trophae:'hammer', geld:1500 } },
 };
 

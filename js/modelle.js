@@ -24,7 +24,8 @@ FF.Modelle = (() => {
     geo.setAttribute('color', new T.Float32BufferAttribute(farben, 3));
     return geo;
   }
-  const vcMat = new T.MeshPhongMaterial({ vertexColors:true, flatShading:true, shininess:0, specular:0x000000 });
+  // Fischkörper glänzen leicht (Schuppen-Glanzlicht)
+  const vcMat = new T.MeshPhongMaterial({ vertexColors:true, flatShading:true, shininess:45, specular:0x3a3a3a });
 
   function augen(g, x, y, z, r) {
     for (const s of [-1, 1]) {
@@ -341,7 +342,12 @@ FF.Modelle = (() => {
 
   /* ---------- Ausrüstung in der Hand (Ego-Sicht) ---------- */
   function hand(gruppe) {
-    const h = mesh(new T.BoxGeometry(.09, .09, .14), mat('#f0c19a'), false); gruppe.add(h); return h;
+    const h = mesh(new T.BoxGeometry(.09, .09, .14), mat('#f0c19a'), false); gruppe.add(h);
+    // Unterarm mit hochgekrempeltem Hemdärmel
+    const arm = mesh(new T.CylinderGeometry(.04, .045, .22, 8), mat('#f0c19a'), false); arm.rotation.x = Math.PI / 2; arm.position.z = .17; h.add(arm);
+    const aermel = mesh(new T.CylinderGeometry(.062, .066, .3, 8), mat('#2f78b8'), false); aermel.rotation.x = Math.PI / 2; aermel.position.z = .4; h.add(aermel);
+    const saum = mesh(new T.TorusGeometry(.062, .012, 5, 10), mat('#eaf2fa'), false); saum.position.z = .25; h.add(saum);
+    return h;
   }
   function inHand(id, rute) {
     const g = new T.Group();
@@ -403,13 +409,17 @@ FF.Modelle = (() => {
     s.geometry.rotateX(Math.PI / 2);
     return s;
   }
+  const wolkenMat = new T.MeshLambertMaterial({ color:'#ffffff', emissive:0x9aa8b8 });
   function wolke(rnd) {
-    const g = new T.Group(), m = new T.MeshPhongMaterial({ color:'#ffffff', emissive:0x8a9aa8, flatShading:true, shininess:0, specular:0x000000, transparent:true, opacity:.92 });
-    const n = 3 + Math.floor(rnd() * 4);
+    const g = new T.Group();
+    const n = 5 + Math.floor(rnd() * 5), laenge = n * 3;
     for (let i = 0; i < n; i++) {
-      const k = new T.Mesh(new T.IcosahedronGeometry(3 + rnd() * 3, 0), m);
-      k.position.set(i * 4 - n * 2, rnd() * 2, (rnd() - .5) * 4); k.scale.y = .55; g.add(k);
+      const r = 2.5 + rnd() * 3.5 * Math.sin((i + .5) / n * Math.PI);
+      const k = new T.Mesh(new T.IcosahedronGeometry(r, 1), wolkenMat);
+      k.position.set(i * 3 - laenge / 2, r * .25 + rnd() * 1.5, (rnd() - .5) * 5); k.scale.y = .62; g.add(k);
     }
+    // flacher Boden, damit sie nicht wie Kugeln aussehen
+    const boden = new T.Mesh(new T.CylinderGeometry(laenge * .45, laenge * .45, 1.2, 12), wolkenMat); boden.scale.z = .35; boden.position.y = -.4; g.add(boden);
     return g;
   }
   function vogel() {

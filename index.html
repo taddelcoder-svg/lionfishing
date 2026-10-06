@@ -63,6 +63,7 @@
   #bossbar{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:min(520px,60vw);display:none;text-align:center}
   #bossbar .name{font-size:20px;font-weight:800;color:#ffb3ad;text-shadow:0 2px 4px #000}
   #bossbar .leiste>div{background:linear-gradient(90deg,#b81f1f,#ff5a4e)}
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:2;background:radial-gradient(ellipse at center,rgba(0,0,0,0) 58%,rgba(0,20,40,.32) 100%)}
   #aua{position:fixed;inset:0;pointer-events:none;box-shadow:inset 0 0 160px 40px rgba(255,0,0,.75);opacity:0;transition:opacity .25s;z-index:4}
   #zahlen{inset:0}
   .zahl{position:absolute;font-weight:800;font-size:22px;color:#fff;text-shadow:0 2px 0 #000,0 0 6px #000;transform:translate(-50%,-50%);white-space:nowrap}
@@ -166,6 +167,7 @@
   <div id="munition"></div>
 </div>
 <div id="zahlen" class="ui"></div>
+<div id="vignette"></div>
 <div id="aua"></div>
 
 <div id="touch">

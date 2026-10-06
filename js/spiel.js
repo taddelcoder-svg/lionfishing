@@ -23,7 +23,9 @@ let S = lesen(SPEICHER);
 const hatteStand = !!S;
 S = Object.assign(neuerStand(), S || {});
 S.koeder = Object.assign(neuerStand().koeder, S.koeder); S.stats = Object.assign(neuerStand().stats, S.stats);
-const E = Object.assign({ ton:true, empf:1, grafik:istTouch ? 'niedrig' : 'hoch' }, lesen(EINST) || {});
+const E = Object.assign({ ton:true, empf:1, grafik:istTouch ? 'mittel' : 'hoch' }, lesen(EINST) || {});
+if (!['hoch', 'mittel', 'niedrig'].includes(E.grafik)) E.grafik = 'mittel';
+Welt.setQualitaet(E.grafik);
 Ton.setAn(E.ton);
 let geaendert = false;
 const merken = () => { geaendert = true; };
@@ -37,10 +39,12 @@ const platz = () => FF.KUEHLBOX[S.kuehlbox].platz;
 /* ================= Grafik ================= */
 const cv = $('c');
 const renderer = new T.WebGLRenderer({ canvas:cv, antialias:E.grafik === 'hoch', powerPreference:'high-performance' });
+const PIXEL = { hoch:1.75, mittel:1.35, niedrig:1 };
 function grafikAnwenden() {
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, E.grafik === 'hoch' ? 1.75 : 1));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, PIXEL[E.grafik] || 1));
   renderer.shadowMap.enabled = E.grafik === 'hoch';
   renderer.setSize(innerWidth, innerHeight, false);
+  Welt.setQualitaet(E.grafik);
 }
 renderer.shadowMap.type = T.PCFSoftShadowMap;
 grafikAnwenden();
@@ -49,15 +53,23 @@ const kamera = new T.PerspectiveCamera(72, innerWidth / innerHeight, .05, 900);
 kamera.rotation.order = 'YXZ';
 szene.add(kamera);
 const hemi = new T.HemisphereLight('#ffffff', '#6b5a3a', .62); szene.add(hemi);
+let sonnenDir = new T.Vector3(.5, .78, .3).normalize();
+function inselLicht() {
+  const I = FF.INSELN[S.insel];
+  sonnenDir = Welt.sonnenRichtung();
+  sonne.color.set(I.sonne); hemi.color.set(I.hemi || '#ffffff'); hemi.groundColor.set(I.hemiBoden || '#6b5a3a');
+  sonne.intensity = S.insel === 2 ? .85 : .95; hemi.intensity = S.insel === 2 ? .82 : .64;
+}
 const sonne = new T.DirectionalLight('#fff4dc', .95);
 sonne.castShadow = true; sonne.shadow.mapSize.set(2048, 2048);
 Object.assign(sonne.shadow.camera, { left:-40, right:40, top:40, bottom:-40, near:1, far:160 });
 sonne.shadow.bias = -.0006;
 szene.add(sonne); szene.add(sonne.target);
 // Im Hochformat das Sichtfeld weiten, sonst sieht man seitlich fast nichts
+let basisFov = 72;
 function sichtAnpassen() {
   kamera.aspect = innerWidth / innerHeight;
-  kamera.fov = Math.min(100, Math.max(72, 2 * Math.atan(Math.tan(32 * Math.PI / 180) / kamera.aspect) * 180 / Math.PI));
+  kamera.fov = basisFov = Math.min(100, Math.max(72, 2 * Math.atan(Math.tan(32 * Math.PI / 180) / kamera.aspect) * 180 / Math.PI));
   kamera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight, false);
 }
@@ -161,8 +173,30 @@ function teilchen(pos, farbe, n, kraft = 3, gr = .08, leben = .7, schwer = 1) {
 }
 function platsch(pos, staerke = 1) {
   const p = pos.clone(); p.y = Welt.welle(p.x, p.z, zeit);
+  welleRing(p, staerke * 1.2, 1.1);
+  if (staerke > .9) setTimeout(() => welleRing(p, staerke * .8, 1), 160);
   teilchen(p, '#ffffff', Math.round(10 * staerke), 3 * staerke, .1, .7);
   teilchen(p, '#9fd8ff', Math.round(8 * staerke), 2.5 * staerke, .08, .6);
+}
+const RINGE = [], ringGeo = new T.RingGeometry(.82, 1, 40); ringGeo.rotateX(-Math.PI / 2);
+function welleRing(pos, groesse = 1, dauer = 1.2) {
+  const m = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color:'#ffffff', transparent:true, opacity:.7, depthWrite:false }));
+  m.position.set(pos.x, Welt.welle(pos.x, pos.z, zeit) + .03, pos.z); m.scale.setScalar(.1); m.renderOrder = 2;
+  szene.add(m); RINGE.push({ m, groesse, dauer, t:0 });
+  while (RINGE.length > 40) { const r = RINGE.shift(); szene.remove(r.m); r.m.material.dispose(); }
+}
+const leuchtGeo = new T.RingGeometry(.6, 1, 32); leuchtGeo.rotateX(-Math.PI / 2);
+const strahlGeo = new T.CylinderGeometry(.12, .3, 4, 10, 1, true); strahlGeo.translate(0, 2, 0);
+function beuteLeuchten(v) {
+  const farbe = FF.SELTEN[v.typ.s].farbe, g = new T.Group();
+  const ring = new T.Mesh(leuchtGeo, new T.MeshBasicMaterial({ color:farbe, transparent:true, opacity:.6, depthWrite:false, blending:T.AdditiveBlending }));
+  g.add(ring); g.userData.ring = ring;
+  if (v.typ.s >= 3) {
+    const strahl = new T.Mesh(strahlGeo, new T.MeshBasicMaterial({ color:farbe, transparent:true, opacity:.25, depthWrite:false, blending:T.AdditiveBlending, side:T.DoubleSide }));
+    g.add(strahl); g.userData.strahl = strahl;
+  }
+  g.scale.setScalar(v.r * 1.4 + .45);
+  szene.add(g); v.leuchten = g;
 }
 function strich(a, b, farbe = '#fff2a8') {
   const g = new T.BufferGeometry().setFromPoints([a, b]);
@@ -296,6 +330,16 @@ function spielerUpdate(dt) {
 
   const bewegt = Math.hypot(P.vel.x, P.vel.z);
   if (P.amBoden) P.bob += bewegt * dt * 1.6;
+  P.sprintet = sprint && bewegt > 6;
+  if (P.amBoden && bewegt > 2) {
+    P.schrittT = (P.schrittT || 0) - dt;
+    if (P.schrittT <= 0) {
+      P.schrittT = P.sprintet ? .26 : .38;
+      const fuss = P.pos.clone();
+      if (P.imWasser) { fuss.y = Welt.welle(fuss.x, fuss.z, zeit); welleRing(fuss, .7, 1); teilchen(fuss, '#ffffff', 3, 1.4, .06, .4); }
+      else if (gb < 1.2 && gb > 0) teilchen(fuss.setY(gb + .05), '#e8d6a0', P.sprintet ? 4 : 2, 1.1, .06, .45);
+    }
+  }
   P.ruhe += dt;
   if (P.ruhe > 5 && S.hp < 100) S.hp = Math.min(100, S.hp + dt * 1.5);
   P.unverw -= dt;
@@ -306,7 +350,10 @@ function kameraSetzen(dt) {
   kamera.position.set(P.pos.x + zufall(-w, w), P.pos.y + 1.62 + Math.sin(P.bob * 2) * .05 + zufall(-w, w), P.pos.z + zufall(-w, w));
   kamera.rotation.set(P.pitch, P.yaw, 0);
   kamera.updateMatrixWorld(true);
-  sonne.position.set(P.pos.x + 30, P.pos.y + 55, P.pos.z + 18); sonne.target.position.copy(P.pos);
+  sonne.position.copy(P.pos).addScaledVector(sonnenDir, 70); sonne.target.position.copy(P.pos);
+  // Beim Sprinten weitet sich das Sichtfeld etwas
+  const zielFov = basisFov + (P.sprintet ? 7 : 0);
+  if (Math.abs(kamera.fov - zielFov) > .05) { kamera.fov += (zielFov - kamera.fov) * Math.min(1, dt * 8); kamera.updateProjectionMatrix(); }
 }
 const vorne = () => new T.Vector3(0, 0, -1).applyQuaternion(kamera.quaternion);
 
@@ -385,6 +432,7 @@ function angelUpdate(dt) {
       const p = A.pose.position; p.y = Welt.welle(p.x, p.z, zeit) - .02;
       A.timer -= dt;
       if (Math.random() < dt * .8) teilchen(p, '#cfefff', 1, .6, .05, .5);
+      if (Math.random() < dt * .6) welleRing(p, .45, 1.4);
       if (A.timer <= 0) { A.zustand = 'biss'; A.timer = .9; Ton.biss(); platsch(p, .5); }
       if (In.hauptNeu) angelAbbrechen();
       break;
@@ -428,6 +476,7 @@ function angelUpdate(dt) {
       p.set(P.pos.x + A.richtung.x * A.dist + A.seite.x * wackel, 0, P.pos.z + A.richtung.z * A.dist + A.seite.z * wackel);
       p.y = Welt.welle(p.x, p.z, zeit) - (zieht ? .15 : .05);
       if (zieht && Math.random() < dt * 14) teilchen(p, '#ffffff', 2, 2, .08, .5);
+      if (Math.random() < dt * (zieht ? 5 : 1.2)) welleRing(p, zieht ? .9 : .5, .9);
       if (A.spann >= 1) { Ton.reissen(); meldung('💥 Schnur gerissen! ' + (typ.boss ? 'Der Boss ist weg.' : ''), '#ff8a80'); angelAbbrechen(); break; }
       if (A.dist > ru.wurf + 10) { meldung('Er ist entkommen …'); angelAbbrechen(); break; }
       if (A.dist < 2.3 || Welt.gelaende(p.x, p.z) > -.15) rausziehen();
@@ -483,7 +532,11 @@ function viehSpawnen(id, pos, vel) {
   V.push(v);
   return v;
 }
-function viehWeg(v) { const i = V.indexOf(v); if (i < 0) return; szene.remove(v.m); V.splice(i, 1); }
+function viehWeg(v) {
+  const i = V.indexOf(v); if (i < 0) return;
+  szene.remove(v.m); if (v.leuchten) szene.remove(v.leuchten);
+  V.splice(i, 1);
+}
 function zumWasser(p) { const d = new T.Vector3(p.x, 0, p.z); return d.lengthSq() < 1e-4 ? d.set(1, 0, 0) : d.normalize(); }
 function zumSpieler(v) { const d = new T.Vector3(P.pos.x - v.pos.x, 0, P.pos.z - v.pos.z); const l = d.length(); return { d:l > 1e-4 ? d.divideScalar(l) : d, l }; }
 
@@ -513,6 +566,11 @@ function viehUpdate(v, dt) {
     v.m.position.set(v.pos.x, v.pos.y + Math.sin(zeit * 3 + v.t) * .05 + (AUFRECHT[typ.form] && typ.form !== 'kugel' ? -v.r : 0), v.pos.z);
     v.m.rotation.set(Math.PI * .5 * v.rollSeite + (typ.form === 'kugel' ? Math.PI * .5 : 0), v.gieren + zeit * .5, 0);
     if (Math.random() < dt * 2) teilchen(v.pos.clone().add(new T.Vector3(0, v.r, 0)), typ.boss ? '#ffcc33' : '#fff7c0', 1, .5, .05, .6, -.2);
+    if (v.leuchten) {
+      v.leuchten.position.set(v.pos.x, Welt.boden(v.pos.x, v.pos.z) + .04, v.pos.z);
+      v.leuchten.userData.ring.material.opacity = .4 + Math.sin(zeit * 4 + v.t) * .2;
+      v.leuchten.userData.ring.rotation.y = zeit;
+    }
     const d = Math.hypot(P.pos.x - v.pos.x, P.pos.z - v.pos.z);
     if (d < 1.7 + v.r && Math.abs(P.pos.y - v.pos.y) < 2.5) einsammeln(v);
     return;
@@ -621,6 +679,7 @@ function viehSchaden(v, n, richtung, kraft) {
 }
 function sterben(v, still) {
   v.tot = true; v.hp = 0; v.flug = false;
+  if (!v.leuchten) beuteLeuchten(v);
   if (!still) { teilchen(v.pos, '#ffffff', 10, 3, .08, .6); teilchen(v.pos, v.typ.f1, 10, 3.5, .1, .7); }
   if (v.typ.boss) {
     S.stats.bosse++; Ton.sieg(); ansage('BOSS BESIEGT!', `${v.typ.name} ist erledigt – sammel die Trophäe ein!`, 4); wackeln(1); merken();
@@ -793,6 +852,13 @@ function effekteUpdate(dt) {
     t.m.userData.funke.visible = Math.sin(zeit * 30) > 0;
     if (Math.random() < dt * 20) teilchen(t.pos.clone().add(new T.Vector3(0, .2, 0)), '#ffcc33', 1, .8, .03, .25, 0);
     if (t.zuender <= 0) { szene.remove(t.m); TNTS.splice(i, 1); if (g < -.3) platsch(t.pos, 3); explosion(t.pos.clone(), FF.WAFFEN.tnt.radius, FF.WAFFEN.tnt.sch, null); }
+  }
+  for (let i = RINGE.length - 1; i >= 0; i--) {
+    const r = RINGE[i]; r.t += dt;
+    const k = r.t / r.dauer;
+    r.m.scale.setScalar(.15 + k * 1.6 * r.groesse); r.m.material.opacity = .7 * (1 - k);
+    r.m.position.y = Welt.welle(r.m.position.x, r.m.position.z, zeit) + .03;
+    if (k >= 1) { szene.remove(r.m); r.m.material.dispose(); RINGE.splice(i, 1); }
   }
   for (let i = TEILCHEN.length - 1; i >= 0; i--) {
     const p = TEILCHEN[i];
@@ -1073,7 +1139,7 @@ function reisen(nach, nurNeuBauen) {
     for (const v of V.slice()) viehWeg(v);
     angelAbbrechen();
     W = Welt.bauen(szene, S.insel, S);
-    sonne.color.set(FF.INSELN[S.insel].sonne);
+    inselLicht();
     spawnen(); hotbarZeichnen();
     $('schwarz').style.opacity = 0;
     if (!nurNeuBauen) ansage(FF.INSELN[S.insel].name, S.insel === 2 ? 'Neue Fische, mehr Geld, mehr Ärger.' : 'Willkommen zurück.', 3);
@@ -1135,7 +1201,7 @@ function menue(art) {
     if (art !== 'start' || hatteStand || S.stats.gefangen) {
       if (!confirm('Wirklich neu anfangen? Dein Spielstand wird gelöscht.')) return;
     }
-    S = neuerStand(); P.mag = {}; speichern(); W = Welt.bauen(szene, 1, S); sonne.color.set(FF.INSELN[1].sonne);
+    S = neuerStand(); P.mag = {}; speichern(); W = Welt.bauen(szene, 1, S); inselLicht();
     for (const v of V.slice()) viehWeg(v);
     spawnen(); P.slot = 0; handBauen(); hotbarZeichnen(); intro();
   });
@@ -1157,12 +1223,17 @@ function einstellungen() {
   fensterAuf(kopf('Einstellungen')
     + `<div class="einst"><span>Ton</span><button data-a="ton" class="${E.ton ? 'gruen' : 'zweit'}">${E.ton ? 'An' : 'Aus'}</button></div>
        <div class="einst"><span>${istTouch ? 'Wisch' : 'Maus'}-Empfindlichkeit</span><input type="range" id="empf" min="0.3" max="2.5" step="0.1" value="${E.empf}"></div>
-       <div class="einst"><span>Grafik</span><button data-a="grafik" class="zweit">${E.grafik === 'hoch' ? 'Hoch (Schatten)' : 'Niedrig (schneller)'}</button></div>`);
+       <div class="einst"><span>Grafik</span><button data-a="grafik" class="zweit">${{ hoch:'Hoch (Schatten, dichtes Gras)', mittel:'Mittel', niedrig:'Niedrig (am schnellsten)' }[E.grafik]}</button></div>`);
   $('empf').oninput = e => { E.empf = +e.target.value; schreiben(EINST, E); };
   fensterZu.zurueck = () => menue('pause');
   knoepfeVerbinden({
     ton:() => { E.ton = !E.ton; Ton.setAn(E.ton); schreiben(EINST, E); einstellungen(); },
-    grafik:() => { E.grafik = E.grafik === 'hoch' ? 'niedrig' : 'hoch'; schreiben(EINST, E); grafikAnwenden(); sonne.castShadow = E.grafik === 'hoch'; einstellungen(); },
+    grafik:() => {
+      E.grafik = { hoch:'mittel', mittel:'niedrig', niedrig:'hoch' }[E.grafik]; schreiben(EINST, E);
+      grafikAnwenden(); sonne.castShadow = E.grafik === 'hoch';
+      szene.traverse(o => { if (o.material) o.material.needsUpdate = true; });
+      einstellungen();
+    },
   });
 }
 function intro() {
@@ -1198,7 +1269,7 @@ function schleife(jetzt) {
   const dt = Math.min(.05, (jetzt - letzte) / 1000); letzte = jetzt;
   zeit += dt;
   if (laeuft && !TEST.halt) schritt(dt);
-  Welt.animieren(zeit, dt);
+  Welt.animieren(zeit, dt, kamera);
   if (ansageZeit > 0) { ansageZeit -= dt; if (ansageZeit <= 0) $('ansage').style.opacity = 0; }
   auaZeit = Math.max(0, auaZeit - dt); $('aua').style.opacity = auaZeit > 0 ? 1 : (S.hp < 30 && laeuft ? .35 : 0);
   renderer.render(szene, kamera);
@@ -1249,7 +1320,7 @@ function angelHud() {
 
 /* ================= Start ================= */
 W = Welt.bauen(szene, S.insel, S);
-sonne.color.set(FF.INSELN[S.insel].sonne);
+inselLicht();
 sonne.castShadow = E.grafik === 'hoch';
 spawnen();
 handBauen(); hotbarZeichnen();
@@ -1262,8 +1333,18 @@ window.fischfieber = {
   TEST,
   get S() { return S; }, P, A, V, In, W:() => W,
   geld(n) { S.geld += n; merken(); },
+  // misst ms pro Bild (wartet per readPixels, bis die Grafikkarte fertig ist)
+  renderZeit(n = 30) {
+    const gl = renderer.getContext(), px = new Uint8Array(4);
+    renderer.render(szene, kamera); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) { zeit += 1 / 60; Welt.animieren(zeit, 1 / 60, kamera); renderer.render(szene, kamera); }
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return +((performance.now() - t0) / n).toFixed(2);
+  },
+  grafik(stufe) { E.grafik = stufe; grafikAnwenden(); sonne.castShadow = stufe === 'hoch'; szene.traverse(o => { if (o.material) o.material.needsUpdate = true; }); },
   fang(id) { A.fisch = id; A.pose.position.copy(P.pos).add(new T.Vector3(0, 0, 8)); rausziehen(); },
-  sim(sek, schrittweite = 1 / 60) { for (let t = 0; t < sek; t += schrittweite) { zeit += schrittweite; schritt(schrittweite); Welt.animieren(zeit, schrittweite); } },
+  sim(sek, schrittweite = 1 / 60) { for (let t = 0; t < sek; t += schrittweite) { zeit += schrittweite; schritt(schrittweite); Welt.animieren(zeit, schrittweite, kamera); } },
   starten() { $('menue').style.display = 'none'; $('fenster').style.display = 'none'; panelOffen = false; laeuft = true; $('hud').style.display = 'block'; },
 };
 })();
