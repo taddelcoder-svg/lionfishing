@@ -179,11 +179,13 @@ FF.Modelle = (() => {
     const a = mesh(new T.BoxGeometry(.1, .06, .02), mat('#ffcc33'), false); a.position.set(.25, .14, 0); a.rotation.y = Math.PI / 2; h.add(a);
     return h;
   }
-  function person(art) {
+  // art: 'hein', 'kuddel' oder 'spieler' (Mitspieler, Jackenfarbe aus farbe)
+  function person(art, farbe) {
     const g = new T.Group();
     const F = {
-      hein:   { jacke:'#f2c12e', hose:'#2d3e5a', haut:'#f0c19a', hut:'suedwester' },
-      kuddel: { jacke:'#1d2b4a', hose:'#22262e', haut:'#e8b48f', hut:'kapitaen', bart:true },
+      hein:    { jacke:'#f2c12e', hose:'#2d3e5a', haut:'#f0c19a', hut:'suedwester' },
+      kuddel:  { jacke:'#1d2b4a', hose:'#22262e', haut:'#e8b48f', hut:'kapitaen', bart:true },
+      spieler: { jacke:farbe, hose:'#3b3f46', haut:'#efc4a0', hut:'muetze' },
     }[art];
     const beine = mesh(new T.CylinderGeometry(.22, .2, .8, 8), mat(F.hose)); beine.position.y = .4; g.add(beine);
     const rumpf = mesh(new T.CylinderGeometry(.3, .27, .75, 8), mat(F.jacke)); rumpf.position.y = 1.15; g.add(rumpf);
@@ -196,6 +198,9 @@ FF.Modelle = (() => {
     if (F.bart) { const b = mesh(new T.SphereGeometry(.2, 7, 6), mat('#f2f2f2')); b.scale.set(.7, .9, 1.05); b.position.set(.1, 1.56, 0); g.add(b); }
     if (F.hut === 'suedwester') {
       const h = mesh(new T.ConeGeometry(.4, .3, 10), mat('#f2c12e')); h.position.y = 1.95; g.add(h);
+    } else if (F.hut === 'muetze') {
+      const h = mesh(new T.SphereGeometry(.25, 9, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat(farbe)); h.position.y = 1.78; g.add(h);
+      const schirm = mesh(new T.BoxGeometry(.22, .03, .3), mat(farbe)); schirm.position.set(.22, 1.8, 0); g.add(schirm);
     } else {
       const h = admiralshut(); h.position.y = 1.9; h.scale.setScalar(1); g.add(h);
     }

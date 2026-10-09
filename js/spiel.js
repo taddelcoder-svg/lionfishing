@@ -155,7 +155,7 @@ function hudAktualisieren() {
   if (w && w.mag) mun = P.nachladen > 0 ? '↻' : (P.mag[id] ?? w.mag) + ' / ' + w.mag;
   if (id === 'tnt') mun = '🧨 ' + S.tnt;
   setz('munition', mun);
-  const boss = V.find(v => v.typ.boss && !v.tot);
+  const boss = V.find(v => v.typ.boss && !v.tot) || [...FREMDV.values()].find(v => v.typ.boss && !v.tot);
   $('bossbar').style.display = boss ? 'block' : 'none';
   if (boss) { setz('bossName', boss.typ.name); $('bossHp').style.width = (boss.hp / boss.max * 100) + '%'; }
 }
@@ -511,6 +511,7 @@ function rausziehen() {
   vel.y = (ziel.y + typ.gr * .5 - start.y + .5 * g * flug * flug) / flug;
   viehSpawnen(id, start, vel);
   platsch(start, typ.boss ? 3 : 1.4); Ton.platsch(1.3); wackeln(typ.boss ? 1.2 : .45);
+  netzEffekt({ art:'platsch', p:vekListe(start), s:typ.boss ? 3 : 1.4 });
   const sl = FF.SELTEN[typ.s];
   meldung(`${typ.boss ? '👑' : '🎣'} <b style="color:${sl.farbe}">${typ.name}</b> <span style="opacity:.7">(${sl.name})</span>`);
   if (!S.fanglog[id]) S.fanglog[id] = 0;
@@ -521,13 +522,14 @@ function rausziehen() {
 
 /* ================= Viecher ================= */
 const AUFRECHT = { krebs:1, krake:1, stiefel:1, kugel:1 };
+let viehNr = 0;   // laufende Nummer, damit Mitspieler einen Fisch eindeutig ansprechen können
 function viehSpawnen(id, pos, vel) {
   const typ = FF.FISCHE[id];
   const m = M.fisch(typ);
   const sk = typ.gr * (typ.form === 'kugel' ? 1.25 : 1);
   m.scale.setScalar(sk); m.rotation.order = 'YXZ';
   szene.add(m);
-  const v = { id, typ, m, sk, pos:pos.clone(), vel:vel.clone(), r:typ.gr * .5, hp:typ.hp, max:typ.hp, tot:false, flug:true, amBoden:false,
+  const v = { n:++viehNr, id, typ, m, sk, pos:pos.clone(), vel:vel.clone(), r:typ.gr * .5, hp:typ.hp, max:typ.hp, tot:false, flug:true, amBoden:false,
     t:0, hop:zufall(.2, .6), cd:1, cd2:4, cd3:8, rammen:0, auf:0, treffer:0, rollSeite:Math.random() < .5 ? 1 : -1, spin:0, gieren:Math.atan2(-vel.z, vel.x), leben:240 };
   V.push(v);
   return v;
@@ -538,7 +540,23 @@ function viehWeg(v) {
   V.splice(i, 1);
 }
 function zumWasser(p) { const d = new T.Vector3(p.x, 0, p.z); return d.lengthSq() < 1e-4 ? d.set(1, 0, 0) : d.normalize(); }
-function zumSpieler(v) { const d = new T.Vector3(P.pos.x - v.pos.x, 0, P.pos.z - v.pos.z); const l = d.length(); return { d:l > 1e-4 ? d.divideScalar(l) : d, l }; }
+// Ziel der Viecher: der nächste Spieler – ich oder ein Mitspieler auf derselben Insel
+function zumSpieler(v) {
+  let pos = P.pos, fremd = null, l = Math.hypot(P.pos.x - v.pos.x, P.pos.z - v.pos.z);
+  for (const f of FREMDE.values()) {
+    if (!f.da || f.menue || zeit - f.zuletzt > 3) continue;   // wer im Menü oder weg ist, wird nicht gejagt
+    const lf = Math.hypot(f.pos.x - v.pos.x, f.pos.z - v.pos.z);
+    if (lf < l) { l = lf; pos = f.pos; fremd = f; }
+  }
+  const d = new T.Vector3(pos.x - v.pos.x, 0, pos.z - v.pos.z);
+  return { d:l > 1e-4 ? d.divideScalar(l) : d, l, pos, fremd };
+}
+// Schaden an das Ziel: bei mir direkt, bei einem Mitspieler über den Server
+function spielerTreffen(sp, n, kraft) {
+  if (sp.fremd) { FF.Netz.senden({ t:'aua', an:sp.fremd.id, n, rx:sp.d.x, rz:sp.d.z, k:kraft || 0 }); return; }
+  schaden(n);
+  if (kraft) stoss(sp.d, kraft);
+}
 
 function viehUpdate(v, dt) {
   v.t += dt; v.treffer = Math.max(0, v.treffer - dt * 4);
@@ -583,7 +601,7 @@ function viehUpdate(v, dt) {
 
   const sp = zumSpieler(v);
   v.cd -= dt; v.cd2 -= dt; v.cd3 -= dt;
-  const nah = sp.l < v.r + .75 && Math.abs(P.pos.y + .8 - v.pos.y) < 1.6;
+  const nah = sp.l < v.r + .75 && Math.abs(sp.pos.y + .8 - v.pos.y) < 1.6;
   if (v.amBoden && !v.flug) {
     v.hop -= dt;
     const huepf = (richtung, weite, hoehe, takt) => {
@@ -597,25 +615,25 @@ function viehUpdate(v, dt) {
       case 'zappeln': huepf(wasserJitter(), typ.stark ? 2 : zufall(1, 1.8), typ.stark ? 6 : zufall(3, 5), typ.stark ? .6 : .85); break;
       case 'beissen':
         huepf(sp.l < 15 ? sp.d : wasserJitter(), 3.8, 3.8, .7);
-        if (nah && v.cd <= 0) { schaden(typ.sch); v.cd = 1; stoss(sp.d, 4); }
+        if (nah && v.cd <= 0) { v.cd = 1; spielerTreffen(sp, typ.sch, 4); }
         break;
       case 'krebs':
         if (sp.l < 18) { v.vel.x = sp.d.x * 2.3; v.vel.z = sp.d.z * 2.3; } else huepf(wasserJitter(), 1.5, 1.5, 1);
-        if (nah && v.cd <= 0) { schaden(typ.sch); v.cd = 1.2; }
+        if (nah && v.cd <= 0) { v.cd = 1.2; spielerTreffen(sp, typ.sch); }
         break;
       case 'explodieren':
         huepf(wasserJitter(), 1.4, 3, .9);
         break;
       case 'zitter':
         huepf(wasserJitter(), 1.3, 2.2, 1.1);
-        if (sp.l < 2.8 && v.cd <= 0) { v.cd = 1.3; Ton.zap(); teilchen(v.pos, '#8fe8ff', 14, 4, .06, .3, 0); schaden(typ.sch); }
+        if (sp.l < 2.8 && v.cd <= 0) { v.cd = 1.3; Ton.zap(); teilchen(v.pos, '#8fe8ff', 14, 4, .06, .3, 0); spielerTreffen(sp, typ.sch); }
         break;
       case 'ramme':
         if (v.cd <= 0 && sp.l < 16) { v.cd = 2.6; v.rammen = .7; v.vel.set(sp.d.x * 12, 2.5, sp.d.z * 12); v.spin = 0; }
         else huepf(sp.d, 1.2, 2.5, .9);
         break;
       case 'boss_kugel':
-        if (v.cd2 <= 0) { v.cd2 = 5.5; stachelregen(v); }
+        if (v.cd2 <= 0) { v.cd2 = 5.5; stachelregen(v, sp.pos); }
         if (v.cd3 <= 0) { v.cd3 = 11; v.auf = 1; ansage('', 'Er bläst sich auf – SPRING!', 1.4); }
         huepf(sp.d, 5, 6.5, 1.5);
         break;
@@ -626,14 +644,14 @@ function viehUpdate(v, dt) {
           v.anlauf -= dt; v.gieren = Math.atan2(-sp.d.z, sp.d.x);
           if (v.anlauf <= 0) { v.rammen = .8; v.vel.set(sp.d.x * 15, 3, sp.d.z * 15); Ton.hieb(); }
         } else if (v.rammen <= 0) huepf(sp.d, 2, 3, 1.1);
-        if (sp.l < v.r + 1.6 && v.cd2 <= 0) { v.cd2 = 2.2; schaden(8); stoss(sp.d, 9); }
+        if (sp.l < v.r + 1.6 && v.cd2 <= 0) { v.cd2 = 2.2; spielerTreffen(sp, 8, 9); }
         break;
     }
   }
   // Rammen trifft
   if (v.rammen > 0) {
     v.rammen -= dt;
-    if (sp.l < v.r + 1 && Math.abs(P.pos.y + .8 - v.pos.y) < 2) { schaden(typ.sch); stoss(sp.d, 10); v.rammen = 0; v.vel.x *= -.4; v.vel.z *= -.4; v.cd2 = Math.max(v.cd2, 1.5); }
+    if (sp.l < v.r + 1 && Math.abs(sp.pos.y + .8 - v.pos.y) < 2) { spielerTreffen(sp, typ.sch, 10); v.rammen = 0; v.vel.x *= -.4; v.vel.z *= -.4; v.cd2 = Math.max(v.cd2, 1.5); }
   }
   // Kugelfisch bläst sich auf und platzt
   if (typ.verh === 'explodieren') {
@@ -648,7 +666,7 @@ function viehUpdate(v, dt) {
     v.m.scale.setScalar(v.sk * (1 + (1 - Math.max(0, v.auf)) * .35));
     if (v.auf <= 0) { druckwelle(v.pos.clone(), 11, 22); v.m.scale.setScalar(v.sk); }
   }
-  if (typ.boss && nah && v.cd <= 0 && typ.verh === 'boss_kugel') { schaden(typ.sch); v.cd = 1; stoss(sp.d, 8); }
+  if (typ.boss && nah && v.cd <= 0 && typ.verh === 'boss_kugel') { v.cd = 1; spielerTreffen(sp, typ.sch, 8); }
 
   // Aussehen
   if (v.vel.x * v.vel.x + v.vel.z * v.vel.z > .3 && !(v.anlauf > 0)) v.gieren = Math.atan2(-v.vel.z, v.vel.x);
@@ -687,51 +705,76 @@ function sterben(v, still) {
 }
 function einsammeln(v) {
   const typ = v.typ;
+  if (!typ.trophae && S.kiste.length >= platz()) {
+    if (!v.vollGemeldet || zeit - v.vollGemeldet > 4) { v.vollGemeldet = zeit; meldung('🧊 Kühlbox voll! Erst bei Hein verkaufen.', '#ffb3ad'); }
+    return;
+  }
+  // Fisch eines Mitspielers: der entscheidet, wer ihn bekommt (wer zuerst kommt)
+  if (v.fremd) {
+    if (v.genommen || (typ.trophae && S.trophaeen.includes(typ.trophae))) return;
+    if (!v.anfrage || zeit - v.anfrage > 1.5) { v.anfrage = zeit; FF.Netz.senden({ t:'nehmen', an:v.besitzer, n:v.n }); }
+    return;
+  }
+  beuteBekommen(v.id);
+  viehWeg(v);
+}
+function beuteBekommen(id) {
+  const typ = FF.FISCHE[id];
+  S.fanglog[id] = (S.fanglog[id] || 0) + 1;
   if (typ.trophae) {
     if (!S.trophaeen.includes(typ.trophae)) S.trophaeen.push(typ.trophae);
     const tr = FF.TROPHAEEN[typ.trophae];
     meldung(`${tr.icon} <b>${tr.name}</b> eingesammelt!`, '#ffcc33'); Ton.kasse();
-    S.fanglog[v.id] = (S.fanglog[v.id] || 0) + 1;
-    viehWeg(v); merken(); return;
+  } else {
+    S.kiste.push(id); S.stats.gefangen++;
+    meldung(`+ ${typ.name} <span class="preis">${typ.wert} $</span>`); Ton.klick();
   }
-  if (S.kiste.length >= platz()) {
-    if (!v.vollGemeldet || zeit - v.vollGemeldet > 4) { v.vollGemeldet = zeit; meldung('🧊 Kühlbox voll! Erst bei Hein verkaufen.', '#ffb3ad'); }
-    return;
-  }
-  S.kiste.push(v.id); S.fanglog[v.id] = (S.fanglog[v.id] || 0) + 1; S.stats.gefangen++;
-  meldung(`+ ${typ.name} <span class="preis">${typ.wert} $</span>`); Ton.klick();
-  viehWeg(v); merken();
+  merken();
 }
 
 /* ================= Boss-Angriffe ================= */
-function stachelregen(v) {
-  const n = 14, versatz = Math.random() * Math.PI;
-  // Höhe so wählen, dass die Stacheln beim Spieler auf Kopfhöhe ankommen (auch am Hang)
-  const ab = Math.max(2, Math.hypot(P.pos.x - v.pos.x, P.pos.z - v.pos.z));
-  const steig = klemm((P.pos.y + 1.2 - v.pos.y) / ab + ab * .012, -.6, .6);
+function stachelregen(v, ziel) {
+  const versatz = Math.random() * Math.PI;
+  // Höhe so wählen, dass die Stacheln beim Ziel auf Kopfhöhe ankommen (auch am Hang)
+  const ab = Math.max(2, Math.hypot(ziel.x - v.pos.x, ziel.z - v.pos.z));
+  const steig = klemm((ziel.y + 1.2 - v.pos.y) / ab + ab * .012, -.6, .6);
+  stachelnBauen(v.pos, versatz, steig);
+  netzEffekt({ art:'stacheln', p:vekListe(v.pos), versatz, steig });
+}
+function stachelnBauen(pos, versatz, steig) {
+  const n = 14;
   for (let i = 0; i < n; i++) {
     const a = versatz + i / n * Math.PI * 2, d = new T.Vector3(Math.cos(a), steig, Math.sin(a)).normalize();
-    const m = M.stachel(); m.position.copy(v.pos); m.lookAt(v.pos.clone().add(d)); szene.add(m);
-    GESCHOSSE.push({ m, pos:v.pos.clone(), vel:d.multiplyScalar(11), leben:2.2, sch:10 });
+    const m = M.stachel(); m.position.copy(pos); m.lookAt(pos.clone().add(d)); szene.add(m);
+    GESCHOSSE.push({ m, pos:pos.clone(), vel:d.multiplyScalar(11), leben:2.2, sch:10 });
   }
   Ton.harpune();
 }
-function druckwelle(pos, radius, sch) {
+function druckwelle(pos, radius, sch, vonNetz) {
+  if (!vonNetz) netzEffekt({ art:'welle', p:vekListe(pos), r:radius, sch });
   const m = new T.Mesh(new T.RingGeometry(.8, 1.2, 40), new T.MeshBasicMaterial({ color:'#ffe9a8', transparent:true, opacity:.85, side:T.DoubleSide }));
   m.rotation.x = -Math.PI / 2; m.position.set(pos.x, Welt.boden(pos.x, pos.z) + .15, pos.z); szene.add(m);
   WELLEN.push({ m, pos, r:1, max:radius, sch, getroffen:false });
   Ton.explosion(); wackeln(.8);
 }
-function explosion(pos, radius, sch, quelle) {
+// opt.tnt: vom Spieler geworfen · opt.fremd: Explosion eines Mitspielers (dessen Rechner hat die Fische schon getroffen)
+function explosion(pos, radius, sch, quelle, opt = {}) {
   teilchen(pos, '#ffb347', 24, 7, .16, .6); teilchen(pos, '#ff5a1f', 16, 5, .14, .5); teilchen(pos, '#555555', 14, 3, .25, 1.1, -.3);
   Ton.explosion(); wackeln(Math.max(0, 1.2 - P.pos.distanceTo(pos) / 20));
-  for (const v of V.slice()) {
-    if (v === quelle || v.tot) continue;
-    const d = v.pos.distanceTo(pos);
-    if (d < radius + v.r) { const r = new T.Vector3(v.pos.x - pos.x, 0, v.pos.z - pos.z).normalize(); viehSchaden(v, sch * (1 - d / (radius + v.r) * .55), r, 9); }
+  if (!opt.fremd) {
+    netzEffekt({ art:'expl', p:vekListe(pos), r:radius, sch, tnt:!!opt.tnt });
+    for (const v of [...V, ...FREMDV.values()]) {
+      if (v === quelle || v.tot) continue;
+      const d = v.pos.distanceTo(pos);
+      if (d < radius + v.r) { const r = new T.Vector3(v.pos.x - pos.x, 0, v.pos.z - pos.z).normalize(); trefferAuf(v, sch * (1 - d / (radius + v.r) * .55), r, 9); }
+    }
   }
   const dp = P.pos.clone().setY(P.pos.y + .8).distanceTo(pos);
-  if (dp < radius) { schaden(Math.round(sch * .4 * (1 - dp / radius) + 6)); stoss(new T.Vector3(P.pos.x - pos.x, 0, P.pos.z - pos.z).normalize(), 9); }
+  if (dp < radius) {
+    // TNT von Mitspielern schubst nur, es tut nicht weh
+    if (!(opt.fremd && opt.tnt)) schaden(Math.round(sch * .4 * (1 - dp / radius) + 6));
+    if (laeuft) stoss(new T.Vector3(P.pos.x - pos.x, 0, P.pos.z - pos.z).normalize(), 9);
+  }
 }
 
 /* ================= Waffen ================= */
@@ -757,7 +800,7 @@ function einschlag(o, d, max) {
 function schuss(dir, waffe, schadenProKugel) {
   const o = kamera.position.clone();
   const treffer = [];
-  for (const v of V) {
+  for (const v of [...V, ...FREMDV.values()]) {
     if (v.tot) continue;
     const t = strahlKugel(o, dir, v.pos, v.r * 1.2 + .1);
     if (t !== null && t < 60) treffer.push({ v, t });
@@ -767,10 +810,11 @@ function schuss(dir, waffe, schadenProKugel) {
   let ende;
   if (treffer.length) {
     const liste = waffe.durch ? treffer : [treffer[0]];
-    for (const h of liste) viehSchaden(h.v, schadenProKugel, new T.Vector3(dir.x, 0, dir.z).normalize(), waffe.stoss);
+    for (const h of liste) trefferAuf(h.v, schadenProKugel, new T.Vector3(dir.x, 0, dir.z).normalize(), waffe.stoss);
     ende = o.clone().addScaledVector(dir, liste[liste.length - 1].t);
   } else ende = einschlag(o, dir, 60) || o.clone().addScaledVector(dir, 60);
   strich(muend, ende, waffe.durch ? '#ffffff' : '#fff2a8');
+  schussLinien.push([...vekListe(muend), ...vekListe(ende)]);
 }
 function waffeUpdate(dt) {
   const id = handId, w = FF.WAFFEN[id];
@@ -785,10 +829,10 @@ function waffeUpdate(dt) {
     P.cd = w.cd; P.schwung = 1; Ton.hieb();
     const o = kamera.position, f = vorne();
     let getroffen = 0;
-    for (const v of V.slice().sort((a, b) => a.pos.distanceTo(o) - b.pos.distanceTo(o))) {
+    for (const v of [...V, ...FREMDV.values()].sort((a, b) => a.pos.distanceTo(o) - b.pos.distanceTo(o))) {
       if (v.tot || getroffen >= 2) continue;
       const zu = v.pos.clone().sub(o), d = zu.length();
-      if (d < w.reich + v.r && zu.normalize().dot(f) > .55) { viehSchaden(v, w.sch, new T.Vector3(f.x, 0, f.z).normalize(), w.stoss); getroffen++; }
+      if (d < w.reich + v.r && zu.normalize().dot(f) > .55) { trefferAuf(v, w.sch, new T.Vector3(f.x, 0, f.z).normalize(), w.stoss); getroffen++; }
     }
     if (!getroffen) einschlag(o, f, w.reich);
   } else if (w.art === 'schuss' || w.art === 'schrot') {
@@ -802,6 +846,7 @@ function waffeUpdate(dt) {
       }
       Ton.flinte(); wackeln(.35);
     } else { schuss(f, w, w.sch); id === 'harpune' ? Ton.harpune() : Ton.schuss(); wackeln(id === 'harpune' ? .3 : .12); }
+    netzEffekt({ art:'schuss', w:id, l:schussLinien.splice(0) });
     const m = new T.Vector3(); (hand.userData.muendung || hand).getWorldPosition(m);
     teilchen(m, '#ffe066', 4, 1.2, .05, .12, 0);
     if (P.mag[id] <= 0) setTimeout(() => { if (handId === id && P.mag[id] <= 0) nachladen(); }, 250);
@@ -811,7 +856,9 @@ function waffeUpdate(dt) {
     const f = vorne(), m = M.tntStange();
     const pos = kamera.position.clone().addScaledVector(f, .6);
     m.position.copy(pos); szene.add(m);
-    TNTS.push({ m, pos, vel:f.clone().multiplyScalar(13).add(new T.Vector3(P.vel.x * .5, 3.5, P.vel.z * .5)), zuender:2.2, dreh:zufall(-10, 10) });
+    const t = { m, pos, vel:f.clone().multiplyScalar(13).add(new T.Vector3(P.vel.x * .5, 3.5, P.vel.z * .5)), zuender:2.2, dreh:zufall(-10, 10) };
+    TNTS.push(t);
+    netzEffekt({ art:'tnt', p:vekListe(t.pos), v:vekListe(t.vel), d:t.dreh });
     Ton.wurf();
     if (S.tnt <= 0) setTimeout(() => { if (handId === 'tnt') slotWaehlen(0); else hotbarZeichnen(); }, 300);
     else hotbarZeichnen();
@@ -851,7 +898,11 @@ function effekteUpdate(dt) {
     t.m.position.copy(t.pos); t.m.rotation.x += t.dreh * dt; t.m.rotation.z += t.dreh * .7 * dt;
     t.m.userData.funke.visible = Math.sin(zeit * 30) > 0;
     if (Math.random() < dt * 20) teilchen(t.pos.clone().add(new T.Vector3(0, .2, 0)), '#ffcc33', 1, .8, .03, .25, 0);
-    if (t.zuender <= 0) { szene.remove(t.m); TNTS.splice(i, 1); if (g < -.3) platsch(t.pos, 3); explosion(t.pos.clone(), FF.WAFFEN.tnt.radius, FF.WAFFEN.tnt.sch, null); }
+    if (t.zuender <= 0) {
+      szene.remove(t.m); TNTS.splice(i, 1);
+      // TNT eines Mitspielers: den Knall schickt dessen Rechner
+      if (!t.fremd) { if (g < -.3) platsch(t.pos, 3); explosion(t.pos.clone(), FF.WAFFEN.tnt.radius, FF.WAFFEN.tnt.sch, null, { tnt:true }); }
+    }
   }
   for (let i = RINGE.length - 1; i >= 0; i--) {
     const r = RINGE[i]; r.t += dt;
@@ -925,6 +976,7 @@ function interagieren() {
 
 /* ================= Fenster ================= */
 function fensterAuf(html) {
+  mpOffen = false;
   panelOffen = true; laeuft = false; In.haupt = false;
   if (document.pointerLockElement) document.exitPointerLock();
   $('fensterInhalt').innerHTML = html; $('fenster').style.display = 'flex';
@@ -932,7 +984,7 @@ function fensterAuf(html) {
   $('touch').style.pointerEvents = 'none';
 }
 function fensterZu() {
-  $('fenster').style.display = 'none'; panelOffen = false;
+  $('fenster').style.display = 'none'; panelOffen = false; mpOffen = false;
   if (fensterZu.zurueck) { const z = fensterZu.zurueck; fensterZu.zurueck = null; z(); return; }
   weiter();
 }
@@ -1139,6 +1191,7 @@ function reisen(nach, nurNeuBauen) {
     for (const v of V.slice()) viehWeg(v);
     angelAbbrechen();
     W = Welt.bauen(szene, S.insel, S);
+    for (const f of FREMDE.values()) fremdenVerstecken(f);
     inselLicht();
     spawnen(); hotbarZeichnen();
     $('schwarz').style.opacity = 0;
@@ -1191,9 +1244,9 @@ function menue(art) {
   const k = $('menueKnoepfe');
   if (art === 'start') {
     k.innerHTML = (hatteStand || S.stats.gefangen ? '<button class="gruen" id="mWeiter">Weiterspielen</button><button class="zweit" id="mNeu">Neues Spiel</button>' : '<button class="gruen" id="mNeu">Spiel starten</button>')
-      + '<button class="zweit" id="mHilfe">Steuerung</button>';
+      + mehrKnopf() + '<button class="zweit" id="mHilfe">Steuerung</button>';
   } else {
-    k.innerHTML = '<button class="gruen" id="mWeiter">Weiter</button><button class="zweit" id="mLog">Fanglog</button><button class="zweit" id="mEinst">Einstellungen</button><button class="zweit" id="mHilfe">Steuerung</button><button class="gefahr" id="mNeu">Neues Spiel</button>';
+    k.innerHTML = '<button class="gruen" id="mWeiter">Weiter</button>' + mehrKnopf() + '<button class="zweit" id="mLog">Fanglog</button><button class="zweit" id="mEinst">Einstellungen</button><button class="zweit" id="mHilfe">Steuerung</button><button class="gefahr" id="mNeu">Neues Spiel</button>';
   }
   const an = (id, f) => { const el = $(id); if (el) el.onclick = () => { Ton.start(); Ton.klick(); f(); }; };
   an('mWeiter', () => starten());
@@ -1206,9 +1259,11 @@ function menue(art) {
     spawnen(); P.slot = 0; handBauen(); hotbarZeichnen(); intro();
   });
   an('mHilfe', () => hilfe(art));
+  an('mMehr', () => mehrspielerOeffnen(art));
   an('mLog', () => { $('menue').style.display = 'none'; fensterZu.zurueck = () => menue('pause'); fanglog(); });
   an('mEinst', () => einstellungen());
 }
+function mehrKnopf() { return `<button class="zweit" id="mMehr">👥 Mit Freunden spielen${FF.Netz.imRaum ? ' · Runde ' + esc(FF.Netz.code) : ''}</button>`; }
 function hilfe(art) {
   $('menue').style.display = 'none';
   fensterAuf(kopf('Steuerung') + (istTouch
@@ -1269,6 +1324,8 @@ function schleife(jetzt) {
   const dt = Math.min(.05, (jetzt - letzte) / 1000); letzte = jetzt;
   zeit += dt;
   if (laeuft && !TEST.halt) schritt(dt);
+  else if (N.imRaum && !TEST.halt) weltSchritt(dt);
+  if (!TEST.halt) mehrspielerUpdate(dt);
   Welt.animieren(zeit, dt, kamera);
   if (ansageZeit > 0) { ansageZeit -= dt; if (ansageZeit <= 0) $('ansage').style.opacity = 0; }
   auaZeit = Math.max(0, auaZeit - dt); $('aua').style.opacity = auaZeit > 0 ? 1 : (S.hp < 30 && laeuft ? .35 : 0);
@@ -1280,16 +1337,20 @@ function schritt(dt) {
   kameraSetzen(dt);
   handBauen();
   if (handId === 'rute') angelUpdate(dt); else { if (A.zustand !== 'bereit') angelAbbrechen(); waffeUpdate(dt); }
-  for (const v of V.slice()) if (V.includes(v)) viehUpdate(v, dt);
-  // zu viel Beute rumliegen? die ältesten verschwinden
-  const tote = V.filter(v => v.tot && !v.typ.trophae);
-  if (tote.length > 20) viehWeg(tote[0]);
-  effekteUpdate(dt);
+  weltSchritt(dt);
   handUpdate(dt);
   stationSuchen();
   angelHud();
   hudAktualisieren();
   In.hauptNeu = false; In.hauptLos = false;
+}
+// Fische und Effekte – läuft mit Mitspielern auch weiter, solange man im Menü oder bei Hein ist
+function weltSchritt(dt) {
+  for (const v of V.slice()) if (V.includes(v)) viehUpdate(v, dt);
+  // zu viel Beute rumliegen? die ältesten verschwinden
+  const tote = V.filter(v => v.tot && !v.typ.trophae);
+  if (tote.length > 20) viehWeg(tote[0]);
+  effekteUpdate(dt);
 }
 function angelHud() {
   const a = $('angel');
@@ -1318,6 +1379,357 @@ function angelHud() {
   setz('angelText', t, 'innerHTML'); setz('entf', e);
 }
 
+/* ================= Mehrspieler =================
+   Jeder spielt mit seinem eigenen Spielstand (Geld, Ausrüstung, Insel). In einer Runde sieht man die
+   anderen, wenn sie auf derselben Insel sind. Jeder Rechner rechnet nur die Fische, die sein Spieler an
+   Land gezogen hat, und schickt sie zehnmal pro Sekunde an die anderen. Trifft man einen fremden Fisch,
+   geht der Treffer an dessen Besitzer; der entscheidet auch, wer die Beute bekommt (wer zuerst kommt).
+   Die Fische greifen den nächsten Spieler an, Schaden an Mitspielern geht ebenfalls über den Server. */
+const FARBEN = ['#e8394a', '#2a8fd6', '#3ccf7a', '#b05bd6'];
+const FREMDE = new Map();    // id -> Mitspieler (Figur, Angel, Position)
+const FREMDV = new Map();    // 'besitzer:n' -> Fisch eines Mitspielers (nur Anzeige und Trefferziel)
+const schussLinien = [];
+const r2 = x => Math.round(x * 100) / 100;
+const zahlOk = (x, max = 1e4) => Number.isFinite(x) ? klemm(x, -max, max) : 0;
+const vekListe = p => [r2(p.x), r2(p.y), r2(p.z)];
+const vekAus = a => Array.isArray(a) && a.length >= 3 && a.every((x, i) => i > 2 || Number.isFinite(x)) ? new T.Vector3(zahlOk(a[0], 2000), zahlOk(a[1], 2000), zahlOk(a[2], 2000)) : null;
+const winkelDiff = (ziel, ist) => { let d = (ziel - ist) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
+const esc = t => String(t).replace(/[&<>"]/g, z => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[z]));
+const hatFisch = id => typeof id === 'string' && Object.prototype.hasOwnProperty.call(FF.FISCHE, id);
+const N = FF.Netz;
+
+function netzEffekt(m) { if (N.imRaum && FREMDE.size) N.senden(Object.assign({ t:'fx', i:S.insel }, m)); }
+// Treffer auf einen Fisch: eigener direkt, fremder geht an den Besitzer (hier nur die Anzeige)
+function trefferAuf(v, n, richtung, kraft) {
+  if (!v.fremd) return viehSchaden(v, n, richtung, kraft);
+  if (v.tot) return;
+  N.senden({ t:'treffer', an:v.besitzer, n:v.n, sch:r2(n), rx:richtung ? r2(richtung.x) : 0, rz:richtung ? r2(richtung.z) : 0, k:kraft || 0 });
+  v.treffer = 1;
+  zahl(v.pos.clone().add(new T.Vector3(0, v.r + .3, 0)), Math.round(n), v.typ.boss ? '#ffb3ad' : '#fff');
+  teilchen(v.pos, v.typ.f1, 5, 2.5, .06, .4);
+  Ton.treffer();
+}
+
+/* ---------- Mitspieler als Figur ---------- */
+function namensSchild(text, farbe) {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 112;
+  const c = cv.getContext('2d');
+  let gr = 64; c.font = `800 ${gr}px Barlow, sans-serif`;
+  while (c.measureText(text).width > 460 && gr > 20) { gr -= 4; c.font = `800 ${gr}px Barlow, sans-serif`; }
+  const b = Math.min(504, c.measureText(text).width + 44);
+  c.fillStyle = 'rgba(6,24,40,.75)'; c.fillRect((512 - b) / 2, 8, b, 96);
+  c.fillStyle = farbe; c.fillRect((512 - b) / 2, 96, b, 8);
+  c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, 256, 56);
+  const sp = new T.Sprite(new T.SpriteMaterial({ map:new T.CanvasTexture(cv), depthTest:false, transparent:true }));
+  sp.scale.set(2, .44, 1); sp.position.y = 2.4; sp.renderOrder = 6;
+  return sp;
+}
+function fremdenBauen(s) {
+  const farbe = FARBEN[s.farbe] || FARBEN[0];
+  const g = new T.Group(); g.visible = false;
+  const koerper = M.person('spieler', farbe); g.add(koerper);
+  // Halter für die Ausrüstung an der rechten Hand (Figur schaut in +x, rechts ist +z)
+  const halter = new T.Group(); halter.position.set(.15, 1.3, .36); g.add(halter);
+  const schild = namensSchild(s.name, farbe); g.add(schild);
+  szene.add(g);
+  const pose = M.pose(); pose.visible = false; szene.add(pose);
+  const geo = new T.BufferGeometry().setFromPoints(Array.from({ length:10 }, () => new T.Vector3()));
+  const leine = new T.Line(geo, new T.LineBasicMaterial({ color:'#ffffff', transparent:true, opacity:.8 }));
+  leine.frustumCulled = false; leine.visible = false; szene.add(leine);
+  return { id:s.id, name:s.name, farbe, g, koerper, halter, schild, pose, leine, ausruestung:null, hand:null, rute:null,
+    pos:new T.Vector3(), ziel:new T.Vector3(), yaw:0, zielYaw:0, pitch:0, poseZiel:new T.Vector3(),
+    insel:0, da:false, neu:true, hp:100, menue:false, zuletzt:-99, bob:0 };
+}
+function fremdenVerstecken(f) {
+  f.da = false; f.neu = true; f.g.visible = false; f.pose.visible = false; f.leine.visible = false;
+  for (const [k, v] of FREMDV) if (v.besitzer === f.id) fremdesViehWeg(k, v);
+}
+function fremdenWeg(f) {
+  fremdenVerstecken(f);
+  szene.remove(f.g); szene.remove(f.pose); szene.remove(f.leine);
+  f.g.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+  f.schild.material.map.dispose(); f.schild.material.dispose(); f.leine.geometry.dispose(); f.leine.material.dispose();
+  FREMDE.delete(f.id);
+}
+function ausruestungSetzen(f, h, ru) {
+  if (f.ausruestung) { f.halter.remove(f.ausruestung); f.ausruestung.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
+  const a = M.inHand(h, ru); a.rotation.y = -Math.PI / 2;   // Ausrüstung zeigt nach -z, die Figur nach +x
+  a.traverse(o => { o.castShadow = false; });
+  f.halter.add(a); f.ausruestung = a; f.hand = h; f.rute = ru.id;
+}
+function fremdenAnimieren(f, dt) {
+  if (!f.da) return;
+  const k = 1 - Math.exp(-12 * dt);
+  const dx = f.ziel.x - f.pos.x, dz = f.ziel.z - f.pos.z, weg = Math.hypot(dx, dz);
+  if (weg > 10 || Math.abs(f.ziel.y - f.pos.y) > 10) f.pos.copy(f.ziel); else f.pos.lerp(f.ziel, k);
+  f.yaw += winkelDiff(f.zielYaw, f.yaw) * k;
+  f.g.position.copy(f.pos); f.g.rotation.y = f.yaw + Math.PI / 2;
+  // Laufen: etwas wippen
+  if (weg > .03) f.bob += dt * 11; else f.bob = 0;
+  f.koerper.position.y = Math.abs(Math.sin(f.bob)) * .07;
+  f.halter.rotation.z = f.pitch * .8;
+  if (f.pose.visible && f.ausruestung && f.ausruestung.userData.spitze) {
+    f.pose.position.lerp(f.poseZiel, k);
+    f.g.updateMatrixWorld(true);
+    const a = new T.Vector3(); f.ausruestung.userData.spitze.getWorldPosition(a);
+    const b = f.pose.position, pkt = f.leine.geometry.attributes.position, d = a.distanceTo(b) * .06;
+    for (let i = 0; i < 10; i++) { const s = i / 9; pkt.setXYZ(i, a.x + (b.x - a.x) * s, a.y + (b.y - a.y) * s - Math.sin(s * Math.PI) * d, a.z + (b.z - a.z) * s); }
+    pkt.needsUpdate = true;
+  }
+}
+
+/* ---------- Fische der Mitspieler ---------- */
+function fremdeViecherSetzen(f, liste) {
+  const gesehen = new Set();
+  if (Array.isArray(liste)) for (const e of liste.slice(0, 60)) {
+    if (!Array.isArray(e) || e.length < 11 || !Number.isInteger(e[0]) || !hatFisch(e[1])) continue;
+    const typ = FF.FISCHE[e[1]], k = f.id + ':' + e[0];
+    const mp = new T.Vector3(zahlOk(e[2], 2000), zahlOk(e[3], 2000), zahlOk(e[4], 2000));
+    gesehen.add(k);
+    let v = FREMDV.get(k);
+    if (!v) {
+      const m = M.fisch(typ); m.rotation.order = 'YXZ'; m.position.copy(mp); szene.add(m);
+      v = { fremd:true, besitzer:f.id, n:e[0], id:e[1], typ, m, r:typ.gr * .5, pos:new T.Vector3(), ziel:new T.Vector3(), rot:[0, 0, 0],
+        yOff:AUFRECHT[typ.form] && typ.form !== 'kugel' ? typ.gr * .5 : 0, skala:typ.gr, tot:false, hp:typ.hp, max:typ.hp, t:Math.random() * 9, treffer:0 };
+      m.rotation.set(zahlOk(e[5]), zahlOk(e[6]), zahlOk(e[7]));
+      FREMDV.set(k, v);
+    }
+    v.ziel.copy(mp); v.rot = [zahlOk(e[5]), zahlOk(e[6]), zahlOk(e[7])];
+    v.skala = klemm(zahlOk(e[8]), .05, 30); v.hp = klemm(zahlOk(e[10]), 0, typ.hp);
+    if (e[9] === 1 && !v.tot) {
+      v.tot = true; if (!v.leuchten) beuteLeuchten(v);
+      if (typ.boss) { Ton.sieg(); ansage('BOSS BESIEGT!', `${typ.name} ist erledigt – jeder kann sich die Trophäe holen!`, 4); }
+    }
+  }
+  for (const [k, v] of FREMDV) if (v.besitzer === f.id && !gesehen.has(k)) fremdesViehWeg(k, v);
+}
+function fremdesViehWeg(k, v) {
+  szene.remove(v.m); if (v.leuchten) szene.remove(v.leuchten);
+  FREMDV.delete(k);
+}
+function fremdesViehAnimieren(v, dt) {
+  v.t += dt; v.treffer = Math.max(0, v.treffer - dt * 4);
+  const k = 1 - Math.exp(-14 * dt), m = v.m;
+  if (m.position.distanceToSquared(v.ziel) > 64) m.position.copy(v.ziel); else m.position.lerp(v.ziel, k);
+  m.rotation.x += winkelDiff(v.rot[0], m.rotation.x) * k;
+  m.rotation.y += winkelDiff(v.rot[1], m.rotation.y) * k;
+  m.rotation.z += winkelDiff(v.rot[2], m.rotation.z) * k;
+  m.scale.setScalar(v.skala * (1 + v.treffer * .2));
+  m.visible = !v.genommen;
+  v.pos.set(m.position.x, m.position.y + v.yOff, m.position.z);
+  if (!v.tot) return;
+  if (v.leuchten) {
+    v.leuchten.visible = !v.genommen;
+    v.leuchten.position.set(v.pos.x, Welt.boden(v.pos.x, v.pos.z) + .04, v.pos.z);
+    v.leuchten.userData.ring.material.opacity = .4 + Math.sin(zeit * 4 + v.t) * .2;
+    v.leuchten.userData.ring.rotation.y = zeit;
+  }
+  if (laeuft && !v.genommen && Math.hypot(P.pos.x - v.pos.x, P.pos.z - v.pos.z) < 1.7 + v.r && Math.abs(P.pos.y - v.pos.y) < 2.5) einsammeln(v);
+}
+
+/* ---------- Senden ---------- */
+let netzTakt = 0, listeTakt = 0;
+function zustandSenden() {
+  // lebende Fische zuerst, höchstens 40
+  const fische = V.filter(v => !v.tot).concat(V.filter(v => v.tot)).slice(0, 40).map(v => [v.n, v.id, ...vekListe(v.m.position),
+    r2(v.m.rotation.x), r2(v.m.rotation.y), r2(v.m.rotation.z), r2(v.m.scale.x), v.tot ? 1 : 0, Math.max(0, Math.ceil(v.hp))]);
+  N.senden({ t:'z', i:S.insel, p:vekListe(P.pos), y:r2(P.yaw), pi:r2(P.pitch), h:handId, ru:rute().id, hp:Math.round(S.hp), m:laeuft ? 0 : 1,
+    a:handId === 'rute' && A.pose.visible ? vekListe(A.pose.position) : 0, v:fische });
+}
+function mehrspielerUpdate(dt) {
+  if (!N.imRaum) return;
+  netzTakt -= dt;
+  if (netzTakt <= 0) { netzTakt = .1; if (FREMDE.size) zustandSenden(); }
+  for (const f of FREMDE.values()) fremdenAnimieren(f, dt);
+  for (const v of [...FREMDV.values()]) fremdesViehAnimieren(v, dt);
+  listeTakt -= dt;
+  if (listeTakt <= 0) { listeTakt = .5; mitspielerZeigen(); }
+}
+// Liste oben rechts: wer ist dabei, wo, wie viel Leben
+function mitspielerZeigen() {
+  const el = $('mitspieler');
+  if (!N.imRaum) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  const zeilen = N.spieler.map(s => {
+    const ich = s.id === N.ich, f = FREMDE.get(s.id);
+    const insel = ich ? S.insel : f && f.insel;
+    const hp = ich ? S.hp : f ? f.hp : 100;
+    let zusatz = '';
+    if (!ich && f) {
+      if (zeit - f.zuletzt > 4) zusatz = ' 💤';
+      else if (f.menue) zusatz = ' ⏸';
+      if (insel && insel !== S.insel) zusatz += ` <small>${FF.INSELN[insel].name}</small>`;
+    }
+    return `<div><i style="background:${FARBEN[s.farbe] || FARBEN[0]}"></i>${esc(s.name)}${ich ? ' <small>(du)</small>' : ''}${zusatz} <span class="hp">❤ ${Math.max(0, Math.round(hp))}</span></div>`;
+  }).join('');
+  setz('mitspieler', `<div class="code">Runde ${esc(N.code)}</div>` + zeilen, 'innerHTML');
+}
+
+/* ---------- Empfangen ---------- */
+function rundeAbgleichen() {
+  const ids = new Set();
+  for (const s of N.spieler) {
+    if (s.id === N.ich) continue;
+    ids.add(s.id);
+    if (!FREMDE.has(s.id)) { FREMDE.set(s.id, fremdenBauen(s)); meldung(`👋 <b>${esc(s.name)}</b> ist dabei`); }
+  }
+  for (const [id, f] of FREMDE) if (!ids.has(id)) { meldung(`${esc(f.name)} ist weg`); fremdenWeg(f); }
+}
+N.an('runde', () => { rundeAbgleichen(); mitspielerZeigen(); if (mpOffen) mehrspielerOeffnen(); });
+N.an('liste', () => { if (mpOffen && !N.imRaum) mehrspielerOeffnen(); });
+N.an('fehler', m => { mpFehlerText = String(m.text || 'Fehler'); if (mpOffen) mehrspielerOeffnen(); else meldung(esc(mpFehlerText), '#ff8a80'); });
+N.an('getrennt', m => {
+  for (const f of [...FREMDE.values()]) fremdenWeg(f);
+  if (m.warImRaum) meldung('Verbindung zu den Mitspielern verloren.', '#ff8a80');
+  mitspielerZeigen();
+  if (mpOffen) mehrspielerOeffnen();
+});
+N.an('z', m => {
+  const f = FREMDE.get(m.von); if (!f) return;
+  f.insel = FF.INSELN[m.i] ? m.i : 0; f.hp = klemm(zahlOk(m.hp), 0, 100); f.menue = !!m.m; f.zuletzt = zeit;
+  if (f.insel !== S.insel) { if (f.da || !f.neu) fremdenVerstecken(f); return; }
+  const p = vekAus(m.p); if (!p) return;
+  f.ziel.copy(p); f.zielYaw = zahlOk(m.y, 1e3); f.pitch = klemm(zahlOk(m.pi), -1.5, 1.5);
+  if (f.neu) { f.pos.copy(p); f.yaw = f.zielYaw; f.neu = false; }
+  f.da = true; f.g.visible = true;
+  const ru = FF.RUTEN.find(r => r.id === m.ru) || FF.RUTEN[0];
+  const h = Object.prototype.hasOwnProperty.call(ICON, m.h) ? m.h : 'rute';
+  if (h !== f.hand || (h === 'rute' && ru.id !== f.rute)) ausruestungSetzen(f, h, ru);
+  const b = h === 'rute' && m.a ? vekAus(m.a) : null;
+  if (b) { if (!f.pose.visible) f.pose.position.copy(b); f.poseZiel.copy(b); f.pose.visible = f.leine.visible = true; }
+  else f.pose.visible = f.leine.visible = false;
+  fremdeViecherSetzen(f, m.v);
+});
+// Ein Mitspieler hat einen meiner Fische getroffen
+N.an('treffer', m => {
+  const v = V.find(x => x.n === m.n); if (!v || v.tot) return;
+  const r = new T.Vector3(zahlOk(m.rx), 0, zahlOk(m.rz)); if (r.lengthSq() > 1e-6) r.normalize();
+  viehSchaden(v, klemm(zahlOk(m.sch), 0, 400), r, klemm(zahlOk(m.k), 0, 20));
+});
+// … will einen meiner erledigten Fische einsammeln: wer zuerst kommt. Trophäen bekommt jeder.
+N.an('nehmen', m => {
+  const v = V.find(x => x.n === m.n);
+  if (!v || !v.tot) { N.senden({ t:'weg', an:m.von, n:m.n }); return; }
+  N.senden({ t:'gegeben', an:m.von, n:m.n, id:v.id });
+  if (v.typ.trophae) return;
+  const f = FREMDE.get(m.von);
+  if (f) meldung(`🤝 ${esc(f.name)} hat ${v.typ.name} eingesammelt`);
+  viehWeg(v);
+});
+N.an('gegeben', m => {
+  const v = FREMDV.get(m.von + ':' + m.n);
+  if (!v || !v.anfrage || !hatFisch(m.id) || m.id !== v.id) return;
+  v.anfrage = 0;
+  if (!v.typ.trophae) v.genommen = true;
+  beuteBekommen(m.id);
+});
+N.an('weg', m => { const v = FREMDV.get(m.von + ':' + m.n); if (v) { v.anfrage = 0; v.genommen = true; } });
+// Ein fremder Fisch hat mich erwischt
+N.an('aua', m => {
+  const f = FREMDE.get(m.von); if (!f || !f.da || !laeuft) return;
+  schaden(klemm(zahlOk(m.n), 0, 60));
+  const r = new T.Vector3(zahlOk(m.rx), 0, zahlOk(m.rz));
+  if (m.k && r.lengthSq() > 1e-6) stoss(r.normalize(), klemm(zahlOk(m.k), 0, 15));
+});
+// Effekte der Mitspieler: Schüsse, TNT, Explosionen, Boss-Angriffe, Platscher
+N.an('fx', m => {
+  const f = FREMDE.get(m.von); if (!f || !f.da || m.i !== S.insel) return;
+  const p = vekAus(m.p);
+  switch (m.art) {
+    case 'schuss':
+      if (!Array.isArray(m.l)) break;
+      for (const l of m.l.slice(0, 12)) {
+        const a = Array.isArray(l) && vekAus(l.slice(0, 3)), b = Array.isArray(l) && vekAus(l.slice(3, 6));
+        if (a && b) strich(a, b, m.w === 'harpune' ? '#ffffff' : '#fff2a8');
+      }
+      if (f.pos.distanceTo(P.pos) < 40) m.w === 'flinte' ? Ton.flinte() : m.w === 'harpune' ? Ton.harpune() : Ton.schuss();
+      break;
+    case 'tnt': {
+      const vel = vekAus(m.v); if (!p || !vel) break;
+      const t = { m:M.tntStange(), pos:p, vel, zuender:2.2, dreh:klemm(zahlOk(m.d), -10, 10), fremd:true };
+      t.m.position.copy(p); szene.add(t.m); TNTS.push(t);
+      break;
+    }
+    case 'expl': if (p) explosion(p, klemm(zahlOk(m.r), 0, 12), klemm(zahlOk(m.sch), 0, 200), null, { fremd:true, tnt:!!m.tnt }); break;
+    case 'stacheln': if (p) stachelnBauen(p, zahlOk(m.versatz), klemm(zahlOk(m.steig), -.6, .6)); break;
+    case 'welle': if (p) druckwelle(p, klemm(zahlOk(m.r), 1, 20), klemm(zahlOk(m.sch), 0, 40), true); break;
+    case 'platsch': if (p) platsch(p, klemm(zahlOk(m.s), .1, 3)); break;
+  }
+});
+
+/* ---------- Fenster: Mit Freunden spielen ---------- */
+const NAME_KEY = 'fischfieber.name';
+let mpOffen = false, mpArt = 'start', mpFehlerText = '', mpVerbindung = 'aus';   // aus | laeuft | fehler
+function nameAusFeld() {
+  const el = $('mpName'); if (!el) return '';
+  const n = el.value.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 16);
+  if (n.length < 2) { mpFehlerText = 'Gib erst einen Namen ein (2 bis 16 Zeichen).'; mehrspielerOeffnen(); return ''; }
+  try { localStorage.setItem(NAME_KEY, n); } catch (e) { /* privat */ }
+  return n;
+}
+async function mpLos(aktion) {
+  const name = nameAusFeld(); if (!name) return;
+  mpFehlerText = '';
+  try { await N.verbinden(); } catch (e) { mpVerbindung = 'fehler'; mehrspielerOeffnen(); return; }
+  N.hallo(name); aktion();
+}
+function mehrspielerOeffnen(art) {
+  if (art) { mpArt = art; mpFehlerText = ''; if (mpVerbindung === 'fehler') mpVerbindung = 'aus'; }
+  $('menue').style.display = 'none';
+  // Eingaben beim Neuzeichnen behalten
+  const altName = $('mpName') ? $('mpName').value : null, altCode = $('mpCode') ? $('mpCode').value : '';
+  const fokus = document.activeElement && ['mpName', 'mpCode'].includes(document.activeElement.id) ? document.activeElement : null;
+  const fokusId = fokus && fokus.id, cursor = fokus && fokus.selectionStart;
+  let name = altName;
+  if (name === null) { try { name = localStorage.getItem(NAME_KEY) || ''; } catch (e) { name = ''; } }
+  const fehler = mpFehlerText ? `<p class="mpFehler">${esc(mpFehlerText)}</p>` : '';
+  let html;
+  if (N.imRaum) {
+    const leute = N.spieler.map(s => {
+      const ich = s.id === N.ich, f = FREMDE.get(s.id), insel = ich ? S.insel : f && f.insel;
+      return `<div class="zeile"><div class="icon"><i class="punkt" style="background:${FARBEN[s.farbe] || FARBEN[0]}"></i></div><div class="mitte"><b>${esc(s.name)}${ich ? ' (du)' : ''}</b><span>${insel ? FF.INSELN[insel].name : 'kommt gleich …'}</span></div></div>`;
+    }).join('');
+    html = kopf('Runde ' + esc(N.code), `Sag deinen Freunden den Code <b class="mpCodeGross">${esc(N.code)}</b> – bis zu 4 Spieler.`) + leute + fehler
+      + `<div class="rede" style="font-size:16px">Jeder spielt mit seinem eigenen Spielstand. Ihr seht euch, wenn ihr auf derselben Insel seid. Fische, die einer an Land zieht, könnt ihr gemeinsam erledigen – wer die Beute zuerst einsammelt, bekommt sie. Die Trophäe eines Bosses kann sich jeder holen. Die Viecher greifen den an, der ihnen am nächsten ist.</div>`
+      + '<div class="knoepfe"><button class="gruen" data-a="spielen" style="flex:1;font-size:20px">Spielen</button><button class="gefahr" data-a="verlassen">Runde verlassen</button></div>';
+  } else {
+    let liste;
+    if (mpVerbindung === 'fehler') liste = '<p class="mpFehler">Keine Verbindung zum Server.</p><div class="knoepfe"><button class="zweit" data-a="nochmal">Nochmal versuchen</button></div>';
+    else if (!N.verbunden) liste = '<p style="opacity:.7">Verbinde …</p>';
+    else if (!N.runden.length) liste = '<p style="opacity:.75">Gerade ist keine Runde offen. Eröffne eine und sag deinen Freunden den Code!</p>';
+    else liste = N.runden.map(r => `<div class="zeile"><div class="icon">👥</div><div class="mitte"><b>Runde ${esc(r.code)}</b><span>${r.spieler.map(esc).join(', ')}</span></div>`
+      + `<button data-a="beitreten" data-w="${esc(r.code)}" ${r.voll ? 'disabled' : ''}>${r.voll ? 'Voll' : 'Beitreten'}</button></div>`).join('');
+    html = kopf('Mit Freunden spielen', 'Bis zu 4 Spieler zusammen auf einer Insel.')
+      + `<div class="einst"><label for="mpName">Dein Name</label><input id="mpName" class="feld" maxlength="16" autocomplete="off" placeholder="z. B. Käpt’n Lena"></div>`
+      + fehler
+      + '<div class="knoepfe" style="margin:6px 0 14px"><button class="gruen" data-a="neu" style="flex:1;font-size:19px">Neue Runde eröffnen</button></div>'
+      + '<h3 style="margin:4px 0 8px">Offene Runden</h3>' + liste
+      + `<div class="einst" style="margin-top:14px"><label for="mpCode">Code eingeben</label><span style="display:flex;gap:6px"><input id="mpCode" class="feld" maxlength="4" autocomplete="off" style="width:96px;text-transform:uppercase" placeholder="ABCD"><button class="zweit" data-a="code">Beitreten</button></span></div>`;
+  }
+  fensterAuf(html);
+  mpOffen = true;
+  if ($('mpName')) $('mpName').value = name;
+  if ($('mpCode')) $('mpCode').value = altCode;
+  if (fokusId && $(fokusId)) { const el = $(fokusId); el.focus(); try { el.setSelectionRange(cursor, cursor); } catch (e) { /* egal */ } }
+  fensterZu.zurueck = () => menue(mpArt);
+  knoepfeVerbinden({
+    neu:() => mpLos(() => N.neu()),
+    beitreten:code => mpLos(() => N.beitreten(code)),
+    code:() => { const c = ($('mpCode').value || '').toUpperCase().trim(); if (c.length !== 4) { mpFehlerText = 'Der Code hat 4 Buchstaben.'; mehrspielerOeffnen(); return; } mpLos(() => N.beitreten(c)); },
+    verlassen:() => { mpFehlerText = ''; N.verlassen(); },
+    nochmal:() => { mpVerbindung = 'aus'; mehrspielerOeffnen(); },
+    spielen:() => {
+      fensterZu.zurueck = null; $('fenster').style.display = 'none'; panelOffen = false; mpOffen = false;
+      if (mpArt === 'start' && !hatteStand && !S.stats.gefangen) intro(); else weiter();
+    },
+  });
+  if (!N.verbunden && mpVerbindung === 'aus') {
+    mpVerbindung = 'laeuft';
+    N.verbinden().then(() => { mpVerbindung = 'aus'; if (mpOffen) mehrspielerOeffnen(); })
+      .catch(() => { mpVerbindung = 'fehler'; if (mpOffen) mehrspielerOeffnen(); });
+  }
+}
+
 /* ================= Start ================= */
 W = Welt.bauen(szene, S.insel, S);
 inselLicht();
@@ -1331,7 +1743,7 @@ requestAnimationFrame(schleife);
 // Zum Testen in der Konsole
 window.fischfieber = {
   TEST,
-  get S() { return S; }, P, A, V, In, W:() => W,
+  get S() { return S; }, get laeuft() { return laeuft; }, P, A, V, In, W:() => W, FREMDE, FREMDV, trefferAuf, explosion,
   geld(n) { S.geld += n; merken(); },
   // misst ms pro Bild (wartet per readPixels, bis die Grafikkarte fertig ist)
   renderZeit(n = 30) {
