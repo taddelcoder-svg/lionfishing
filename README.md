@@ -12,6 +12,8 @@ npm install
 npm start               # http://localhost:10900
 ```
 
+Tests: `npm test` (Olympia-Anbindung, ohne Browser).
+
 Einzige Abhängigkeit ist `ws` für das Spielen mit Freunden. Lokal ohne `ZUGANG_PASSWORT` ohne Passwortschutz; auf Render bleibt die Seite gesperrt, bis es gesetzt ist.
 
 ## Aufbau
@@ -25,6 +27,10 @@ Einzige Abhängigkeit ist `ws` für das Spielen mit Freunden. Lokal ohne `ZUGANG
 | `js/spiel.js` | Spieler, Angeln (Wurf, Biss, Drill), Viecher-KI, Waffen, Bosse, Shop, Casino, Speichern, Mehrspieler |
 | `js/netz.js` | Verbindung zum Server: Runden eröffnen/beitreten, Nachrichten senden und empfangen |
 | `js/ton.js` | synthetische Geräusche (WebAudio), abschaltbar |
+| `vendor/` | three.js und die Schrift „Bricolage Grotesque“ (SIL OFL, selbst ausgeliefert, keine CDNs) |
+| `olymp.js` | Olympia-Anbindung (Kopie der Vorlage aus `olympiade/geteilt`): Ticket prüfen, Wertung melden |
+| `olymp-logik.js` | Angelturnier auf dem Server: Einstellungen prüfen, Punkte aus den gemeldeten Fängen rechnen, ein Versuch je Ticket |
+| `test/olymp-test.js` | Test für Ticket-Prüfung, Punkterechnung und den Ablauf einer Meldung (`npm test`) |
 
 Spielstand liegt im `localStorage` (`fischfieber.v1`), Einstellungen in `fischfieber.einst`.
 
@@ -49,6 +55,26 @@ Im Menü auf **👥 Mit Freunden spielen**: Namen eingeben, eine Runde eröffnen
 Technik: Jeder Rechner rechnet nur seine eigenen Fische und schickt sie zehnmal pro Sekunde mit (Nachricht `z`).
 Treffer auf fremde Fische (`treffer`), Beute-Anfragen (`nehmen` → `gegeben`/`weg`) und Schaden an Mitspielern (`aua`)
 gehen über den Server an genau einen Spieler, Effekte (`fx`) an alle. Der Server speichert nichts, er hält die Runden nur im Arbeitsspeicher.
+
+## Olympiade (Angelturnier)
+
+Fischfieber ist eine Einzel-Disziplin der Swimming-Lions-Olympiade (Kennung `fischfieber`, Wertung `wert`: höher ist besser).
+Die Olympiade öffnet das Spiel mit `?olymp=<Ticket>`. Ohne Ticket läuft alles wie gewohnt.
+
+- **Ablauf:** Menü auf das Nötige verkürzt (Name aus dem Ticket, kein Shop, kein Casino, kein Kapitän, kein Mehrspieler) → „Turnier starten“ → Countdown →
+  feste Zeit angeln (3, 4 oder 5 Minuten; die Uhr läuft auch im Pausenmenü weiter) → Ergebnisbildschirm mit Punktzahl und „Zurück zur Olympiade“.
+- **Alle haben dasselbe:** gleiche Insel (Schiffbruch-Insel oder Haifisch-Atoll), gleiche Ausrüstung (Bambusrute, Paddel, Pistole, kein Geld) und gleiche
+  Fisch-Reihenfolge – wer den n-ten Fisch an den Haken bekommt, wird aus der Lauf-Kennung (`t.l`) ausgewürfelt.
+- **Wertung:** Wert aller eingesammelten Fische (sie werden sofort gutgeschrieben), minus 20 $ je Ohnmacht. Boss-Fische gibt es nicht (kein Köder).
+- **Einstellungen im Ticket (`t.c`):** `dauer` (180 / 240 / 300 Sekunden, Standard 240) und `insel` (1 oder 2, Standard 1). Unsinn fällt auf den Standard zurück.
+- **Server (`POST /api/olymp`, ohne Passwort-Cookie, geschützt durch das signierte Ticket):** `info` (Anzeigedaten, „bin da“), `start` (der Server merkt sich die
+  Startzeit, nur einmal), `ergebnis` (rohe Zahlen: `fang` = Fisch → Anzahl, `ohn` = Ohnmächte). Der Server rechnet die Punkte **selbst** (Wert aus `js/daten.js`),
+  lässt nur Fische der gewählten Insel zu, begrenzt die Mengen auf das Machbare (höchstens ein Fisch je 4 Sekunden, wenige seltene), lehnt Meldungen vor Ablauf der
+  Turnierzeit ab und meldet mit `olymp.wertMelden`. Pro Ticket zählt nur die erste Meldung (409 bei der zweiten).
+- **Seite neu geladen:** Fänge und Startzeit liegen im `localStorage` (Schlüssel `fischfieber.olymp.<Lauf>.<Spieler>`), das Turnier läuft weiter. Der normale Spielstand wird im
+  Olympia-Modus weder gelesen noch geschrieben.
+
+Katalog-Eintrag für `olympiade/spiele.js`: siehe PR-Beschreibung.
 
 ## Testen in der Konsole
 

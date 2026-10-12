@@ -19,9 +19,27 @@ function neuerStand() {
 }
 function lesen(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
 function schreiben(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* privat */ } }
-let S = lesen(SPEICHER);
-const hatteStand = !!S;
+/* ---------- Olympiade ----------
+   Mit ?olymp=<Ticket> im Link läuft ein Angelturnier: ein Versuch mit festem Zeitlimit auf derselben Insel
+   für alle, ohne Shop, Casino und Kapitän. Der Spielstand des Spielers bleibt unberührt (nichts wird
+   gelesen oder gespeichert). Die Punktzahl rechnet der Server aus den gemeldeten Fängen. */
+const OLY = (() => {
+  let ticket = null;
+  try {
+    ticket = new URLSearchParams(location.search).get('olymp');
+    if (ticket) sessionStorage.setItem('fischfieber.olymp', ticket); else ticket = sessionStorage.getItem('fischfieber.olymp');
+  } catch (e) { /* kein Speicher */ }
+  if (!ticket) return null;
+  // Das Ticket ist nur zur Anzeige und für den Rückweg gelesen – gültig macht es erst der Server
+  let roh = {};
+  try { roh = JSON.parse(decodeURIComponent(escape(atob(ticket.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))))) || {}; } catch (e) { /* egal */ }
+  return { ticket, roh, info:null, einst:{ dauer:240, insel:1 }, phase:'laden', fehler:'', ergebnis:null, start:0, fang:{}, ohn:0, n:0, gemeldet:{}, gesendet:false, rngFisch:null, rngBiss:null, speicherKey:'' };
+})();
+const OLY_STRAFE = 20;   // Strafe in $ für jede Ohnmacht (muss zu olymp-logik.js passen)
+let S = OLY ? null : lesen(SPEICHER);
+const hatteStand = !OLY && !!S;
 S = Object.assign(neuerStand(), S || {});
+if (OLY) { S.waffen = ['paddel', 'pistole']; S.insel = 1; }
 S.koeder = Object.assign(neuerStand().koeder, S.koeder); S.stats = Object.assign(neuerStand().stats, S.stats);
 const E = Object.assign({ ton:true, empf:1, grafik:istTouch ? 'mittel' : 'hoch' }, lesen(EINST) || {});
 if (!['hoch', 'mittel', 'niedrig'].includes(E.grafik)) E.grafik = 'mittel';
@@ -29,7 +47,7 @@ Welt.setQualitaet(E.grafik);
 Ton.setAn(E.ton);
 let geaendert = false;
 const merken = () => { geaendert = true; };
-function speichern() { schreiben(SPEICHER, S); geaendert = false; }
+function speichern() { if (!OLY) schreiben(SPEICHER, S); geaendert = false; }
 setInterval(() => { if (geaendert) speichern(); }, 4000);
 window.addEventListener('beforeunload', () => speichern());
 
@@ -147,8 +165,17 @@ const geldText = n => (n < 0 ? '−' : '') + Math.abs(Math.round(n)).toLocaleStr
 function hudAktualisieren() {
   setz('geld', geldText(S.geld));
   $('geld').classList.toggle('minus', S.geld < 0);
-  setz('kiste', S.kiste.length + '/' + platz());
+  if (OLY) setz('kiste', OLY.n + (OLY.n === 1 ? ' Fisch' : ' Fische'));
+  else {
+    setz('kiste', S.kiste.length + '/' + platz());
+    $('kiste').classList.toggle('voll', S.kiste.length >= platz());
+  }
   $('hpBalken').style.width = klemm(S.hp, 0, 100) + '%';
+  $('hpRahmen').className = S.hp < 30 ? 'niedrig' : S.hp < 60 ? 'mittel' : '';
+  setz('hpZahl', String(Math.max(0, Math.round(S.hp))));
+  setz('hudRute', '🎣 ' + rute().name);
+  const kd = FF.KOEDER[S.aktivKoeder];
+  setz('hudKoeder', (S.aktivKoeder === 'wurm' ? '🪱 ' : '✨ ') + kd.name.replace(/ ×\d+/, '') + (kd.menge === Infinity ? '' : ' ×' + S.koeder[S.aktivKoeder]));
   setz('inselName', FF.INSELN[S.insel].name);
   const id = slots()[P.slot], w = FF.WAFFEN[id];
   let mun = '';
@@ -387,14 +414,19 @@ function angelAbbrechen(manuell) {
   if (A.zustand === 'drill' && manuell) meldung('Leine gekappt. Fisch weg.');
   A.zustand = 'bereit'; A.pose.visible = false; schnur.visible = false; A.fisch = null; A.ladung = 0;
 }
-function bissZeit() { return Math.max(1, zufall(3, 8) * FF.KOEDER[S.aktivKoeder].biss); }
+// Olympiade: Wer den n-ten Fisch an den Haken bekommt, ist für alle gleich (Zufall aus der Lauf-Kennung)
+function mulberry(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function seedAus(text) { let h = 2166136261; for (const c of String(text)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+const zufFisch = () => OLY && OLY.rngFisch ? OLY.rngFisch() : Math.random();
+const zufBiss = () => OLY && OLY.rngBiss ? OLY.rngBiss() : Math.random();
+function bissZeit() { return Math.max(1, (3 + zufBiss() * 5) * FF.KOEDER[S.aktivKoeder].biss); }
 function waehleFisch(entf) {
   const k = FF.KOEDER[S.aktivKoeder];
   if (k.boss && k.insel === S.insel && S.koeder[S.aktivKoeder] > 0 && !V.some(v => v.typ.boss && !v.tot)) return k.boss;
   const sel = (k.selten || 1) * (entf > 24 ? 1.3 : 1) * (1 + FF.RUTEN.indexOf(rute()) * .15);
   const liste = Object.entries(FF.FISCHE).filter(([, f]) => f.w > 0 && (f.insel === S.insel || f.insel === 0));
   const gw = liste.map(([, f]) => f.w * (f.s >= 3 ? sel : 1) * (f.s >= 4 ? sel * .5 : 1));
-  let r = Math.random() * gw.reduce((a, b) => a + b, 0);
+  let r = zufFisch() * gw.reduce((a, b) => a + b, 0);
   for (let i = 0; i < liste.length; i++) if ((r -= gw[i]) <= 0) return liste[i][0];
   return liste[0][0];
 }
@@ -725,6 +757,11 @@ function beuteBekommen(id) {
     if (!S.trophaeen.includes(typ.trophae)) S.trophaeen.push(typ.trophae);
     const tr = FF.TROPHAEEN[typ.trophae];
     meldung(`${tr.icon} <b>${tr.name}</b> eingesammelt!`, '#ffcc33'); Ton.kasse();
+  } else if (OLY) {
+    if (OLY.phase !== 'laeuft') return;
+    OLY.fang[id] = (OLY.fang[id] || 0) + 1; OLY.n++; S.stats.gefangen++;
+    olympNeuRechnen(); olympMerken();
+    meldung(`+ ${typ.name} <span class="preis">${typ.wert} $</span>`); Ton.klick();
   } else {
     S.kiste.push(id); S.stats.gefangen++;
     meldung(`+ ${typ.name} <span class="preis">${typ.wert} $</span>`); Ton.klick();
@@ -947,7 +984,8 @@ function ohnmacht() {
   angelAbbrechen();
   spawnen();
   P.unverw = 2;
-  ansage('Ohnmächtig!', verloren ? `Hein hat dich zum Feuer geschleppt. Deine ${verloren} Fische sind weg.` : 'Hein hat dich zum Feuer geschleppt.', 3.5);
+  if (OLY) { OLY.ohn++; olympNeuRechnen(); olympMerken(); }
+  ansage('Ohnmächtig!', OLY ? `Hein hat dich zum Feuer geschleppt. Strafe: −${OLY_STRAFE} $` : verloren ? `Hein hat dich zum Feuer geschleppt. Deine ${verloren} Fische sind weg.` : 'Hein hat dich zum Feuer geschleppt.', 3.5);
   Ton.pech(); merken();
 }
 function spawnen() {
@@ -960,6 +998,7 @@ let naechsteStation = null;
 function stationSuchen() {
   naechsteStation = null; let best = 3.4;
   for (const s of W.stationen) {
+    if (OLY && s.art !== 'feuer') continue;   // Turnier: kein Shop, kein Casino, kein Kapitän
     const d = Math.hypot(s.pos.x - P.pos.x, s.pos.z - P.pos.z);
     if (d < best) { best = d; naechsteStation = s; }
   }
@@ -981,14 +1020,17 @@ function fensterAuf(html) {
   if (document.pointerLockElement) document.exitPointerLock();
   $('fensterInhalt').innerHTML = html; $('fenster').style.display = 'flex';
   hudAktualisieren();
-  $('touch').style.pointerEvents = 'none';
+  $('hinweis').style.display = 'none';
+  $('touch').style.pointerEvents = 'none'; $('touch').style.visibility = 'hidden';
 }
 function fensterZu() {
+  if (OLY && OLY.phase === 'fertig') return;   // das Ergebnis lässt sich nicht wegklicken
   $('fenster').style.display = 'none'; panelOffen = false; mpOffen = false;
   if (fensterZu.zurueck) { const z = fensterZu.zurueck; fensterZu.zurueck = null; z(); return; }
   weiter();
 }
-function kopf(titel, unter) { return `<div class="kopf"><div><h2>${titel}</h2>${unter ? `<p class="unter">${unter}</p>` : ''}</div><button class="zu" data-zu>✕</button></div>`; }
+function kopf(titel, unter) { return `<div class="kopf"><div><h2>${titel}</h2>${unter ? `<p class="unter">${unter}</p>` : ''}</div><button class="zu" data-zu aria-label="Schließen">✕</button></div>`; }
+const geldChip = (id) => `<span class="geldchip${S.geld < 0 ? ' minus' : ''}"${id ? ` id="${id}"` : ''}>💰 ${geldText(S.geld)}</span>`;
 function knoepfeVerbinden(handler = {}) {
   for (const el of $('fensterInhalt').querySelectorAll('[data-zu]')) el.onclick = () => { Ton.klick(); fensterZu(); };
   for (const el of $('fensterInhalt').querySelectorAll('[data-a]')) el.onclick = () => { Ton.klick(); handler[el.dataset.a] && handler[el.dataset.a](el.dataset.w, el); };
@@ -998,17 +1040,17 @@ function knoepfeVerbinden(handler = {}) {
 let shopTab = 'verkauf';
 function shopOeffnen(tab) {
   if (tab) shopTab = tab;
-  const tabs = [['verkauf', 'Verkaufen'], ['ruten', 'Angeln'], ['koeder', 'Köder'], ['waffen', 'Waffen'], ['kram', 'Ausrüstung']];
+  const tabs = [['verkauf', '💰 Verkaufen'], ['ruten', '🎣 Angeln'], ['koeder', '🪱 Köder'], ['waffen', '🔫 Waffen'], ['kram', '🧰 Ausrüstung']];
   let inhalt = '';
-  const zeile = (icon, name, text, rechts) => `<div class="zeile"><div class="icon">${icon}</div><div class="mitte"><b>${name}</b><span>${text}</span></div>${rechts}</div>`;
-  const kauf = (preis, a, w, besitz, label) => besitz ? `<button disabled>${besitz}</button>` : `<span class="preis">${geldText(preis)}</span><button data-a="${a}" data-w="${w}" ${S.geld < preis ? 'disabled' : ''}>${label || 'Kaufen'}</button>`;
+  const zeile = (icon, name, text, rechts, farbe) => `<div class="zeile"${farbe ? ` style="--sel:${farbe}"` : ''}><div class="icon">${icon}</div><div class="mitte"><b>${name}</b><span>${text}</span></div>${rechts}</div>`;
+  const kauf = (preis, a, w, besitz, label) => besitz ? `<span class="badge">✓ ${besitz}</span>` : `<span class="preis${S.geld < preis ? ' knapp' : ''}">${geldText(preis)}</span><button data-a="${a}" data-w="${w}" ${S.geld < preis ? 'disabled' : ''}>${label || 'Kaufen'}</button>`;
   if (shopTab === 'verkauf') {
     const gruppen = {};
     for (const id of S.kiste) gruppen[id] = (gruppen[id] || 0) + 1;
     const summe = S.kiste.reduce((a, id) => a + FF.FISCHE[id].wert, 0);
     inhalt = Object.keys(gruppen).length
-      ? Object.entries(gruppen).map(([id, n]) => { const f = FF.FISCHE[id]; return zeile(fischIcon(f), `${f.name} ×${n}`, `<span style="color:${FF.SELTEN[f.s].farbe}">${FF.SELTEN[f.s].name}</span> · je ${f.wert} $`, `<span class="preis">${geldText(f.wert * n)}</span>`); }).join('')
-        + `<div class="summe"><span>Zusammen</span><span class="preis">${geldText(summe)}</span></div><div class="knoepfe" style="margin-top:10px"><button class="gruen" data-a="verkaufen" style="flex:1;font-size:20px">Alles verkaufen</button></div>`
+      ? Object.entries(gruppen).map(([id, n]) => { const f = FF.FISCHE[id]; return zeile(fischIcon(f), `${f.name} ×${n}`, `<span style="color:${FF.SELTEN[f.s].farbe}">${FF.SELTEN[f.s].name}</span> · je ${f.wert} $`, `<span class="preis">${geldText(f.wert * n)}</span>`, FF.SELTEN[f.s].farbe); }).join('')
+        + `<div class="summe"><span>Zusammen</span><span class="preis">${geldText(summe)}</span></div><div class="knoepfe" style="margin-top:12px"><button class="gruen" data-a="verkaufen" style="flex:1;font-size:20px;min-height:54px">Alles verkaufen</button></div>`
       : `<div class="rede"><b>Hein:</b> „Deine Kühlbox ist leer, Jung. Raus mit dir, Fische fangen! Die Viecher an Land musst du erst erledigen, bevor sie zurück ins Wasser zappeln.“</div>`;
   } else if (shopTab === 'ruten') {
     inhalt = FF.RUTEN.map(r => zeile('🎣', r.name, `${r.text} · Einholen ${r.zug} m/s · Wurf ${r.wurf} m · hält Kraft ${r.kraft}`, kauf(r.preis, 'rute', r.id, S.ruten.includes(r.id) && (r === rute() ? 'Im Einsatz' : 'Besitzt')))).join('');
@@ -1016,7 +1058,7 @@ function shopOeffnen(tab) {
     inhalt = Object.entries(FF.KOEDER).filter(([, k]) => !k.insel || k.insel === S.insel).map(([id, k]) => {
       const anz = id === 'wurm' ? '∞' : S.koeder[id];
       const aktiv = S.aktivKoeder === id;
-      const rechts = (id === 'wurm' ? '' : kauf(k.preis, 'koeder', id)) + (aktiv ? '<button disabled>Am Haken</button>' : `<button class="zweit" data-a="anhaken" data-w="${id}" ${id !== 'wurm' && !S.koeder[id] ? 'disabled' : ''}>Anhaken</button>`);
+      const rechts = (id === 'wurm' ? '' : kauf(k.preis, 'koeder', id)) + (aktiv ? '<span class="badge">✓ Am Haken</span>' : `<button class="zweit" data-a="anhaken" data-w="${id}" ${id !== 'wurm' && !S.koeder[id] ? 'disabled' : ''}>Anhaken</button>`);
       return zeile(k.boss ? '👑' : id === 'wurm' ? '🪱' : id === 'garnele' ? '🦐' : '✨', `${k.name} <span style="opacity:.6">(${anz})</span>`, k.text, rechts);
     }).join('');
   } else if (shopTab === 'waffen') {
@@ -1026,11 +1068,11 @@ function shopOeffnen(tab) {
     }).join('');
   } else {
     const nk = FF.KUEHLBOX[S.kuehlbox + 1];
-    inhalt = zeile('🧊', `Kühlbox (${platz()} Plätze)`, nk ? `Größere Kühlbox: ${nk.platz} Plätze` : 'Größer geht nicht.', nk ? kauf(nk.preis, 'kuehlbox', '') : '<button disabled>Maximum</button>')
-      + (FF.WESTEN[S.weste + 1] ? zeile('🦺', FF.WESTEN[S.weste + 1].name, `Fängt ${FF.WESTEN[S.weste + 1].schutz * 100} % des Schadens ab${S.weste ? ' (jetzt: ' + FF.WESTEN[S.weste].schutz * 100 + ' %)' : ''}`, kauf(FF.WESTEN[S.weste + 1].preis, 'weste', '')) : zeile('🦺', FF.WESTEN[S.weste].name, `Fängt ${FF.WESTEN[S.weste].schutz * 100} % des Schadens ab`, '<button disabled>Maximum</button>'))
+    inhalt = zeile('🧊', `Kühlbox (${platz()} Plätze)`, nk ? `Größere Kühlbox: ${nk.platz} Plätze` : 'Größer geht nicht.', nk ? kauf(nk.preis, 'kuehlbox', '') : '<span class="badge">✓ Maximum</span>')
+      + (FF.WESTEN[S.weste + 1] ? zeile('🦺', FF.WESTEN[S.weste + 1].name, `Fängt ${FF.WESTEN[S.weste + 1].schutz * 100} % des Schadens ab${S.weste ? ' (jetzt: ' + FF.WESTEN[S.weste].schutz * 100 + ' %)' : ''}`, kauf(FF.WESTEN[S.weste + 1].preis, 'weste', '')) : zeile('🦺', FF.WESTEN[S.weste].name, `Fängt ${FF.WESTEN[S.weste].schutz * 100} % des Schadens ab`, '<span class="badge">✓ Maximum</span>'))
       + zeile('🩹', FF.VERBAND.name, `Heilt ${FF.VERBAND.heil} Lebenspunkte sofort · du hast ${Math.round(S.hp)}/100`, kauf(FF.VERBAND.preis, 'verband', '', S.hp >= 100 && 'Gesund'));
   }
-  fensterAuf(kopf('Heins Angelbedarf', `Geld: <b style="color:${S.geld < 0 ? 'var(--rot)' : 'var(--gelb)'}">${geldText(S.geld)}</b> · Kühlbox ${S.kiste.length}/${platz()}`)
+  fensterAuf(kopf('Heins Angelbedarf', `${geldChip()} &nbsp;🧊 Kühlbox ${S.kiste.length}/${platz()}`)
     + `<div class="tabs">${tabs.map(([id, n]) => `<button class="${id === shopTab ? 'an' : ''}" data-a="tab" data-w="${id}">${n}</button>`).join('')}</div>` + inhalt);
   knoepfeVerbinden({
     tab:w => shopOeffnen(w),
@@ -1058,15 +1100,15 @@ function fischIcon(f) { return { fisch:'🐟', kugel:'🐡', krebs:'🦀', hai:'
 let einsatz = 10, radWinkel = 0, dreht = false;
 function casinoOeffnen() {
   const stufen = [10, 50, 100, 500, 1000];
-  fensterAuf(kopf('Möwen-Casino', `„Kraah! Das Haus gewinnt fast nie, Schätzchen.“ · Geld: <b style="color:${S.geld < 0 ? 'var(--rot)' : 'var(--gelb)'}" id="casGeld">${geldText(S.geld)}</b>`)
-    + `<div class="einsatz">Einsatz: ${stufen.map(s => `<button class="${s === einsatz ? 'an' : ''}" data-a="einsatz" data-w="${s}">${s} $</button>`).join('')}</div>
+  fensterAuf(kopf('Möwen-Casino', '„Kraah! Das Haus gewinnt fast nie, Schätzchen.“')
+    + `<div class="einsatz">${geldChip('casGeld')}<span style="margin-left:6px">Einsatz:</span>${stufen.map(s => `<button class="${s === einsatz ? 'an' : ''}" data-a="einsatz" data-w="${s}">${s} $</button>`).join('')}</div>
     <div class="casino">
-      <div><h3>🎡 Glücksrad</h3><canvas id="radCv" width="300" height="300"></canvas><br><button data-a="rad">Drehen</button></div>
-      <div><h3>🎰 Fischautomat</h3><div class="walzen"><div class="walze">🐟</div><div class="walze">🦀</div><div class="walze">🐡</div></div>
-        <span style="font-size:13px;opacity:.75">3 gleiche: 🐟×5 🦀×8 🐡×12 ⚓×20 💰×40 🐋 Jackpot · 2 gleiche: ×1,2</span><br><br><button data-a="slot">Hebel ziehen</button></div>
+      <div><h3>🎡 Glücksrad</h3><canvas id="radCv" width="300" height="300" aria-label="Glücksrad"></canvas><span class="info">Der Zeiger oben entscheidet.</span><button data-a="rad" style="min-width:140px">Drehen</button></div>
+      <div><h3>🎰 Fischautomat</h3><div class="walzen" id="walzen"><div class="walze">🐟</div><div class="walze">🦀</div><div class="walze">🐡</div></div>
+        <span class="info">3 gleiche: 🐟 ×5 · 🦀 ×8 · 🐡 ×12 · ⚓ ×20 · 💰 ×40 · 🐋 Jackpot<br>2 gleiche: ×1,2</span><button data-a="slot" style="min-width:140px">Hebel ziehen</button></div>
     </div>
-    <div id="casinoErgebnis"></div>
-    <p style="font-size:13px;opacity:.6;text-align:center">Achtung: Das Feld „PLEITE“ kostet dich den Einsatz doppelt – auch ins Minus.</p>`);
+    <div id="casinoErgebnis" aria-live="polite"></div>
+    <p class="fussnote">Achtung: Das Feld „PLEITE“ kostet dich den Einsatz doppelt – auch ins Minus.</p>`);
   radZeichnen();
   knoepfeVerbinden({
     einsatz:w => { if (dreht) return; einsatz = +w; casinoOeffnen(); },
@@ -1074,29 +1116,41 @@ function casinoOeffnen() {
     slot:() => slotDrehen(),
   });
 }
-function casGeldZeigen() { hudAktualisieren(); const el = $('casGeld'); if (el) { el.textContent = geldText(S.geld); el.style.color = S.geld < 0 ? 'var(--rot)' : 'var(--gelb)'; } }
+function casGeldZeigen() { hudAktualisieren(); const el = $('casGeld'); if (el) { el.textContent = '💰 ' + geldText(S.geld); el.classList.toggle('minus', S.geld < 0); } }
 function darfSetzen() {
   if (dreht) return false;
-  if (S.geld < einsatz) { $('casinoErgebnis').innerHTML = '<span style="color:var(--rot)">Zu wenig Geld für den Einsatz!</span>'; return false; }
+  if (S.geld < einsatz) { $('casinoErgebnis').innerHTML = '<span style="color:#ff9d94">Zu wenig Geld für den Einsatz!</span>'; return false; }
   return true;
 }
 function radZeichnen() {
   const c = $('radCv'); if (!c) return;
-  const g = c.getContext('2d'), n = FF.RAD.length, r = 140;
+  const g = c.getContext('2d'), n = FF.RAD.length, r = 126;
   g.clearRect(0, 0, 300, 300);
-  g.save(); g.translate(150, 150); g.rotate(radWinkel);
+  g.save(); g.translate(150, 158); g.rotate(radWinkel);
   for (let i = 0; i < n; i++) {
     const a0 = i / n * Math.PI * 2, a1 = (i + 1) / n * Math.PI * 2, x = FF.RAD[i];
     g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, r, a0, a1); g.closePath();
-    g.fillStyle = x < 0 ? '#111' : x === 0 ? (i % 2 ? '#7a1a1a' : '#a82424') : x >= 5 ? '#ffcc33' : x >= 2 ? '#2a9d8f' : '#2f6f9e'; g.fill();
-    g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
-    g.save(); g.rotate((a0 + a1) / 2); g.fillStyle = x >= 5 ? '#000' : '#fff'; g.font = '800 20px Barlow, sans-serif'; g.textAlign = 'right'; g.textBaseline = 'middle';
+    g.fillStyle = x < 0 ? '#14181d' : x === 0 ? (i % 2 ? '#7a1a1a' : '#a82424') : x >= 5 ? '#ffcc33' : x >= 2 ? '#1d7f74' : '#2f6f9e'; g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 2; g.stroke();
+    g.save(); g.rotate((a0 + a1) / 2); g.fillStyle = x >= 5 ? '#1c1300' : '#fff'; g.font = '800 19px "Bricolage Grotesque", sans-serif'; g.textAlign = 'right'; g.textBaseline = 'middle';
     g.fillText(x < 0 ? 'PLEITE' : '×' + String(x).replace('.', ','), r - 10, 0); g.restore();
   }
   g.restore();
-  g.fillStyle = '#ffcc33'; g.strokeStyle = '#000'; g.lineWidth = 2;
-  g.beginPath(); g.moveTo(150, 26); g.lineTo(137, 2); g.lineTo(163, 2); g.closePath(); g.fill(); g.stroke();
-  g.beginPath(); g.arc(150, 150, 14, 0, 7); g.fillStyle = '#fff'; g.fill();
+  // goldener Rand mit Lämpchen
+  g.save(); g.translate(150, 158);
+  g.beginPath(); g.arc(0, 0, r + 9, 0, 7); g.lineWidth = 14; g.strokeStyle = '#c98f00'; g.stroke();
+  g.beginPath(); g.arc(0, 0, r + 9, 0, 7); g.lineWidth = 10; g.strokeStyle = '#ffcc33'; g.stroke();
+  const lampen = 24, blink = Math.floor(radWinkel * 6) % 2;
+  for (let i = 0; i < lampen; i++) {
+    const a = i / lampen * Math.PI * 2;
+    g.beginPath(); g.arc(Math.cos(a) * (r + 9), Math.sin(a) * (r + 9), 3, 0, 7);
+    g.fillStyle = (i + (dreht ? blink : 0)) % 2 ? '#fff7d1' : '#b07c00'; g.fill();
+  }
+  g.restore();
+  // Nabe und Zeiger
+  g.beginPath(); g.arc(150, 158, 16, 0, 7); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 4; g.strokeStyle = '#c98f00'; g.stroke();
+  g.fillStyle = '#ff5a4e'; g.strokeStyle = '#fff'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(150, 36); g.lineTo(136, 6); g.quadraticCurveTo(150, -2, 164, 6); g.closePath(); g.fill(); g.stroke();
 }
 function radDrehen() {
   if (!darfSetzen()) return;
@@ -1116,7 +1170,7 @@ function radDrehen() {
     const gewinn = x < 0 ? -einsatz : Math.round(einsatz * x);
     S.geld += gewinn; S.stats.casino += gewinn - einsatz; dreht = false; merken();
     const el = $('casinoErgebnis');
-    if (el) el.innerHTML = x < 0 ? `<span style="color:var(--rot)">💀 PLEITE! Noch mal −${einsatz} $</span>` : x === 0 ? '<span style="color:#ff8a80">Nix. Mona kichert.</span>' : `<span style="color:var(--gelb)">×${String(x).replace('.', ',')} → +${geldText(gewinn)}</span>`;
+    if (el) el.innerHTML = x < 0 ? `<span style="color:#ff9d94">💀 PLEITE! Noch mal −${einsatz} $</span>` : x === 0 ? '<span style="color:#ff9d94">Nix. Mona kichert.</span>' : `<span style="color:var(--gelb)">×${String(x).replace('.', ',')} → +${geldText(gewinn)}</span>`;
     x >= 2 ? Ton.sieg() : x <= 0 ? Ton.pech() : Ton.kasse();
     casGeldZeigen();
   };
@@ -1127,7 +1181,7 @@ function slotDrehen() {
   dreht = true; S.geld -= einsatz; casGeldZeigen();
   const ziehe = () => { let r = Math.random() * FF.SLOT.reduce((a, s) => a + s.w, 0); for (const s of FF.SLOT) if ((r -= s.w) <= 0) return s; return FF.SLOT[0]; };
   const erg = [ziehe(), ziehe(), ziehe()];
-  const walzen = [...document.querySelectorAll('.walze')];
+  const walzen = [...document.querySelectorAll('.walze')]; if ($('walzen')) $('walzen').classList.remove('gewinn');
   let n = 0;
   const iv = setInterval(() => {
     n++;
@@ -1144,9 +1198,10 @@ function slotDrehen() {
         } else text = `Drei ${erg[0].s}! +${geldText(gewinn)}`;
         Ton.sieg();
       } else if (erg[0] === erg[1] || erg[1] === erg[2] || erg[0] === erg[2]) { gewinn = Math.round(einsatz * FF.SLOT_PAAR); text = `Zwei gleiche: +${geldText(gewinn)}`; Ton.kasse(); }
-      else { text = '<span style="color:#ff8a80">Nichts. Kraah!</span>'; Ton.pech(); }
+      else { text = '<span style="color:#ff9d94">Nichts. Kraah!</span>'; Ton.pech(); }
       S.geld += gewinn; S.stats.casino += gewinn - einsatz; merken();
       const el = $('casinoErgebnis'); if (el) el.innerHTML = `<span style="color:var(--gelb)">${text}</span>`;
+      const wz = $('walzen'); if (wz && gewinn > 0) { wz.classList.remove('gewinn'); void wz.offsetWidth; wz.classList.add('gewinn'); }
       casGeldZeigen();
     }
   }, 70);
@@ -1170,7 +1225,7 @@ function kuddelOeffnen() {
     rede = '„Wir haben’s geschafft, du alter Seebär! Du kannst trotzdem weiter angeln – hier gibt’s noch Goldhaie. Oder willst du zurück zur ersten Insel?“';
     knoepfe = '<button class="zweit" data-a="reise" data-w="1">⛵ Zur Schiffbruch-Insel</button><button data-a="ende">🏆 Abspann ansehen</button>';
   }
-  const fehlt = !fertig ? `<p style="opacity:.8">${hatTr ? '✅' : '❌'} ${tr.icon} ${tr.name} &nbsp; ${hatGeld ? '✅' : '❌'} ${q.geld} $ (du hast ${geldText(S.geld)})</p>` : '';
+  const fehlt = !fertig ? `<div class="auftrag"><span class="${hatTr ? 'ok' : ''}">${hatTr ? '✅' : '❌'} ${tr.icon} ${tr.name}</span><span class="${hatGeld ? 'ok' : ''}">${hatGeld ? '✅' : '❌'} ${q.geld} $ (du hast ${geldText(S.geld)})</span></div>` : '';
   fensterAuf(kopf('Kapitän Kuddel', FF.INSELN[insel].name) + `<div class="rede"><b>Kuddel:</b> ${rede}</div>${fehlt}<div class="knoepfe">${knoepfe}</div>`);
   knoepfeVerbinden({
     quest:() => {
@@ -1199,17 +1254,23 @@ function reisen(nach, nurNeuBauen) {
     weiter();
   }, 900);
 }
+function konfetti(n = 46) {
+  const farben = ['#ffcc33', '#ff5a4e', '#3ccf7a', '#2ec4d6', '#ffffff', '#b05bd6'];
+  let h = '<div class="konfetti" aria-hidden="true">';
+  for (let i = 0; i < n; i++) h += `<i style="left:${Math.round(Math.random() * 100)}%;background:${farben[i % farben.length]};animation-delay:${(Math.random() * 1.6).toFixed(2)}s;animation-duration:${(2.6 + Math.random() * 2).toFixed(2)}s;--dr:${Math.round(360 + Math.random() * 540)}deg"></i>`;
+  return h + '</div>';
+}
 function ende() {
   S.ende = true; merken(); Ton.sieg();
   const st = S.stats;
-  fensterAuf(`<div style="text-align:center"><h2 style="font-size:46px">🏆 HEIMKEHR!</h2>
-    <div class="rede">Nach Schiffbruch, Kugelkönig, Casino-Schulden und einem Hammerhai mit Hut tuckert ihr endlich Richtung Heimat. Kapitän Kuddel weint ein bisschen. Hein hat sich als blinder Passagier eingeschlichen.</div>
-    <div class="gitter" style="text-align:center">
+  fensterAuf(`<div class="ergebnis"><h2 style="font-size:clamp(34px,8vw,46px)">🏆 HEIMKEHR!</h2>
+    <div class="rede" style="text-align:left">Nach Schiffbruch, Kugelkönig, Casino-Schulden und einem Hammerhai mit Hut tuckert ihr endlich Richtung Heimat. Kapitän Kuddel weint ein bisschen. Hein hat sich als blinder Passagier eingeschlichen.</div>
+    <div class="gitter stats">
       <div class="karte"><div class="gross">🎣</div><b>${st.gefangen}</b><span>Fische eingesammelt</span></div>
       <div class="karte"><div class="gross">💰</div><b>${geldText(st.verdient)}</b><span>verdient</span></div>
       <div class="karte"><div class="gross">🎰</div><b>${geldText(st.casino)}</b><span>Casino-Bilanz</span></div>
       <div class="karte"><div class="gross">😵</div><b>${st.ohnmacht}</b><span>mal ohnmächtig</span></div>
-    </div><br><button class="gruen" data-zu style="font-size:20px">Weiterangeln</button></div>`);
+    </div><div class="knoepfe" style="margin-top:16px"><button class="gruen" data-zu style="flex:1;font-size:20px;min-height:54px">Weiterangeln</button></div>${konfetti()}</div>`);
   knoepfeVerbinden();
 }
 
@@ -1240,13 +1301,15 @@ function fanglog() {
 function menue(art) {
   laeuft = false;
   if (document.pointerLockElement) document.exitPointerLock();
-  $('menue').style.display = 'flex';
+  $('menue').style.display = 'flex'; $('touch').style.visibility = 'hidden';
   const k = $('menueKnoepfe');
-  if (art === 'start') {
-    k.innerHTML = (hatteStand || S.stats.gefangen ? '<button class="gruen" id="mWeiter">Weiterspielen</button><button class="zweit" id="mNeu">Neues Spiel</button>' : '<button class="gruen" id="mNeu">Spiel starten</button>')
-      + mehrKnopf() + '<button class="zweit" id="mHilfe">Steuerung</button>';
+  $('olympKarte').hidden = !OLY;
+  if (OLY) olympMenueBauen(k);
+  else if (art === 'start') {
+    k.innerHTML = (hatteStand || S.stats.gefangen ? '<button class="gruen haupt" id="mWeiter">▶ Weiterspielen</button><button class="zweit" id="mNeu">Neues Spiel</button><button class="zweit" id="mHilfe">🎮 Steuerung</button>' : '<button class="gruen haupt" id="mNeu">▶ Spiel starten</button><button class="zweit breit" id="mHilfe">🎮 Steuerung</button>')
+      + mehrKnopf();
   } else {
-    k.innerHTML = '<button class="gruen" id="mWeiter">Weiter</button>' + mehrKnopf() + '<button class="zweit" id="mLog">Fanglog</button><button class="zweit" id="mEinst">Einstellungen</button><button class="zweit" id="mHilfe">Steuerung</button><button class="gefahr" id="mNeu">Neues Spiel</button>';
+    k.innerHTML = '<button class="gruen haupt" id="mWeiter">▶ Weiter</button><button class="zweit" id="mLog">📖 Fanglog</button><button class="zweit" id="mEinst">⚙️ Einstellungen</button><button class="zweit" id="mHilfe">🎮 Steuerung</button><button class="gefahr" id="mNeu">Neues Spiel</button>' + mehrKnopf();
   }
   const an = (id, f) => { const el = $(id); if (el) el.onclick = () => { Ton.start(); Ton.klick(); f(); }; };
   an('mWeiter', () => starten());
@@ -1262,14 +1325,16 @@ function menue(art) {
   an('mMehr', () => mehrspielerOeffnen(art));
   an('mLog', () => { $('menue').style.display = 'none'; fensterZu.zurueck = () => menue('pause'); fanglog(); });
   an('mEinst', () => einstellungen());
+  an('mStart', () => olympStart());
+  an('mZurueck', () => olympZurueck());
 }
-function mehrKnopf() { return `<button class="zweit" id="mMehr">👥 Mit Freunden spielen${FF.Netz.imRaum ? ' · Runde ' + esc(FF.Netz.code) : ''}</button>`; }
+function mehrKnopf() { return `<button class="zweit breit" id="mMehr">👥 Mit Freunden spielen${FF.Netz.imRaum ? ' · Runde ' + esc(FF.Netz.code) : ''}</button>`; }
 function hilfe(art) {
   $('menue').style.display = 'none';
   fensterAuf(kopf('Steuerung') + (istTouch
     ? `<div class="tasten"><span>Linker Daumen</span><span>Laufen (ganz drücken = rennen)</span><span>Rechts wischen</span><span>Umschauen</span><kbd>AKTION</kbd><span>Halten = Wurf aufladen, loslassen = auswerfen. Beim Biss tippen! Beim Drill halten = einholen, loslassen wenn die Leiste rot wird. Mit Waffen: schießen/schlagen</span><kbd>⤒</kbd><span>Springen</span><kbd>E</kbd><span>Mit Leuten reden</span><kbd>↻</kbd><span>Nachladen</span><span>Unten</span><span>Ausrüstung wechseln</span></div>`
     : `<div class="tasten"><kbd>W A S D</kbd><span>Laufen</span><kbd>Shift</kbd><span>Rennen</span><kbd>Leertaste</kbd><span>Springen</span><kbd>Maus</kbd><span>Umschauen</span><kbd>Linke Maustaste</kbd><span>Angel: halten = Wurf aufladen, loslassen = auswerfen. Beim Biss klicken! Beim Drill halten = einholen, loslassen wenn die Leiste rot wird. Waffen: schießen/schlagen</span><kbd>1–6 / Mausrad</kbd><span>Ausrüstung wechseln</span><kbd>E</kbd><span>Mit Leuten reden</span><kbd>R</kbd><span>Nachladen</span><kbd>Q</kbd><span>Leine kappen</span><kbd>Tab</kbd><span>Fanglog</span><kbd>Esc</kbd><span>Pause</span></div>`)
-    + `<div class="rede"><b>So läuft’s:</b> Fisch an Land ziehen → er fliegt dir vor die Füße und zappelt Richtung Wasser → mit Paddel oder Waffe erledigen → einsammeln → bei Hein verkaufen → bessere Ausrüstung kaufen → Boss besiegen → mit Kuddel weitersegeln.</div>`);
+    + (OLY ? `<div class="rede"><b>Turnier:</b> Fisch an Land ziehen → er zappelt Richtung Wasser → mit Paddel oder Pistole erledigen → einsammeln (zählt sofort). Am Lagerfeuer heilst du dich. Die Zeit läuft auch im Pausenmenü weiter.</div>` : `<div class="rede"><b>So läuft’s:</b> Fisch an Land ziehen → er fliegt dir vor die Füße und zappelt Richtung Wasser → mit Paddel oder Waffe erledigen → einsammeln → bei Hein verkaufen → bessere Ausrüstung kaufen → Boss besiegen → mit Kuddel weitersegeln.</div>`));
   fensterZu.zurueck = () => menue(art);
   knoepfeVerbinden();
 }
@@ -1307,7 +1372,7 @@ function weiter() {
   if (panelOffen) return;
   $('menue').style.display = 'none';
   $('hud').style.display = 'block';
-  $('touch').style.pointerEvents = '';
+  $('touch').style.pointerEvents = ''; $('touch').style.visibility = '';
   laeuft = true; In.haupt = false; In.hauptNeu = false;
   if (!istTouch) sperren(); else vollbild();
   hotbarZeichnen();
@@ -1315,6 +1380,156 @@ function weiter() {
 function pause() {
   if (!laeuft) return;
   speichern(); menue('pause');
+}
+
+/* ================= Olympiade: Angelturnier =================
+   Ablauf: Ticket prüfen lassen (info) → „Turnier starten“ (start, der Server merkt sich die Startzeit) →
+   Countdown → feste Zeit angeln → Fänge an den Server melden (ergebnis). Der Server rechnet die Punkte selbst. */
+async function olympPost(aktion, extra) {
+  try {
+    const r = await fetch('/api/olymp', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(Object.assign({ ticket:OLY.ticket, aktion }, extra || {})) });
+    let d = {}; try { d = await r.json(); } catch (e) { /* keine Antwort */ }
+    return { status:r.status, ok:r.ok && d.ok !== false, d };
+  } catch (e) { return { status:0, ok:false, d:{ fehler:'Keine Verbindung zum Server.' } }; }
+}
+const dauerText = sek => sek % 60 === 0 ? (sek / 60) + ' Min.' : Math.floor(sek / 60) + ':' + String(sek % 60).padStart(2, '0') + ' Min.';
+const zeitText = ms => { const t = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+function olympNeuRechnen() {
+  let summe = 0, n = 0;
+  for (const [id, c] of Object.entries(OLY.fang)) if (hatFisch(id) && Number.isFinite(c) && c > 0) { summe += FF.FISCHE[id].wert * c; n += c; }
+  OLY.n = n; S.geld = Math.max(0, summe - OLY_STRAFE * OLY.ohn);
+}
+function olympMerken() {
+  if (!OLY.speicherKey) return;
+  schreiben(OLY.speicherKey, { start:OLY.start, fang:OLY.fang, ohn:OLY.ohn });
+}
+function olympZurueck() {
+  let z = OLY.info && OLY.info.zurueck || OLY.roh.z || '';
+  try { sessionStorage.removeItem('fischfieber.olymp'); } catch (e) { /* egal */ }
+  location.href = /^https?:\/\//.test(z) ? z : '/';
+}
+function inselWechseln(nr) {
+  if (S.insel === nr) return;
+  S.insel = nr;
+  for (const v of V.slice()) viehWeg(v);
+  W = Welt.bauen(szene, S.insel, S); inselLicht(); spawnen(); hotbarZeichnen();
+}
+async function olympInfo() {
+  OLY.phase = 'laden'; menue('start');
+  const r = await olympPost('info');
+  if (!r.ok) {
+    OLY.phase = 'fehler';
+    OLY.fehler = r.status === 403 ? 'Dein Olympia-Ticket ist ungültig oder abgelaufen. Hol dir in der Olympiade ein neues.' : (r.d.fehler || 'Keine Verbindung zur Olympiade. Lade die Seite neu.');
+    return menue('start');
+  }
+  const d = r.d;
+  OLY.info = d.info; OLY.einst = d.einst;
+  OLY.speicherKey = 'fischfieber.olymp.' + d.info.lauf + '.' + d.info.spieler;
+  OLY.rngFisch = mulberry(seedAus(d.info.lauf + ':fisch')); OLY.rngBiss = mulberry(seedAus(d.info.lauf + ':biss'));
+  inselWechseln(d.einst.insel);
+  $('olympTitel').textContent = 'Turnier' + (d.info.nr ? ' ' + d.info.nr + '/' + d.info.von : '');
+  if (d.ergebnis) { OLY.phase = 'schon'; OLY.ergebnis = d.ergebnis; return menue('start'); }
+  const alt = lesen(OLY.speicherKey);
+  if (alt && alt.start) {
+    // Seite neu geladen: Zeit und Fänge laufen weiter
+    OLY.start = +alt.start || 0; OLY.ohn = klemm(Math.floor(+alt.ohn) || 0, 0, 99);
+    for (const [id, c] of Object.entries(alt.fang || {})) if (hatFisch(id) && c > 0) OLY.fang[id] = Math.min(999, Math.floor(c));
+    olympNeuRechnen();
+    OLY.phase = 'laeuft'; OLY.gemeldet = {}; $('olympZeit').hidden = false;
+    if (Date.now() >= OLY.start + OLY.einst.dauer * 1000) return olympEnde();
+    starten(); ansage('Weiter geht’s!', 'Die Zeit lief weiter.', 2.2);
+    return;
+  }
+  if (d.gestartet) { OLY.phase = 'verloren'; return menue('start'); }
+  OLY.phase = 'bereit'; menue('start');
+}
+// Karte und Knöpfe im Menü – je nach Stand des Turniers
+function olympMenueBauen(k) {
+  const O = OLY, i = O.info || {}, roh = O.roh || {}, kt = $('olympKarte');
+  const kopfzeile = `<span class="eyebrow">🏅 ${esc(i.titel || roh.ti || 'Olympiade')}${(i.nr || roh.nr) ? ' · Disziplin ' + (i.nr || roh.nr) + '/' + (i.von || roh.von) : ''}</span>`;
+  const zurueck = '<button class="zweit breit" id="mZurueck">↩ Zurück zur Olympiade</button>';
+  let karte, knoepfe = '';
+  if (O.phase === 'laden') karte = `${kopfzeile}<h3>Verbinde mit der Olympiade …</h3><p>Einen Moment bitte.</p>`;
+  else if (O.phase === 'fehler') { karte = `${kopfzeile}<h3>Das hat nicht geklappt</h3><p>${esc(O.fehler)}</p>`; knoepfe = zurueck; }
+  else if (O.phase === 'schon') { karte = `${kopfzeile}<h3>Dein Versuch ist schon gewertet</h3><p>${esc(O.ergebnis || '')}</p>`; knoepfe = zurueck; }
+  else if (O.phase === 'verloren') { karte = `${kopfzeile}<h3>Dein Versuch lief schon</h3><p>Er wurde unterbrochen (Seite neu geladen oder anderes Gerät). Ein zweiter Start ist nicht möglich – sag der Leitung Bescheid.</p>`; knoepfe = zurueck; }
+  else if (O.phase === 'laeuft') {
+    karte = `${kopfzeile}<h3>Pause – die Zeit läuft weiter!</h3><p>Noch <b id="olympRest" style="color:var(--akzent)">${zeitText(O.start + O.einst.dauer * 1000 - Date.now())}</b> · bisher ${geldText(S.geld)}</p>`;
+    knoepfe = '<button class="gruen haupt" id="mWeiter">▶ Weiter angeln</button><button class="zweit" id="mEinst">⚙️ Einstellungen</button><button class="zweit" id="mHilfe">🎮 Steuerung</button>';
+  } else {
+    const dauer = O.einst.dauer, name = i.name || roh.n || 'Spieler';
+    karte = `${kopfzeile}<h3>Angelturnier, ${esc(name)}</h3>
+      <p>Angle ${dauer / 60 === Math.round(dauer / 60) ? dauer / 60 : (dauer / 60).toFixed(1).replace('.', ',')} Minuten lang so viele Fische wie möglich. Gewertet wird der <b>Wert deiner Fänge</b> – sie werden sofort gutgeschrieben, Shop und Casino gibt es nicht. Jede Ohnmacht kostet ${OLY_STRAFE} $. Ein Versuch, für alle dieselbe Insel und dieselbe Fisch-Reihenfolge.</p>
+      <div class="daten"><span>⏱ ${dauerText(dauer)}</span><span>🏝 ${esc(FF.INSELN[O.einst.insel].name)}</span><span>🎣 Angel · 🛶 Paddel · 🔫 Pistole</span></div>`;
+    knoepfe = '<button class="gruen haupt" id="mStart">🏁 Turnier starten</button><button class="zweit" id="mHilfe">🎮 Steuerung</button><button class="zweit" id="mEinst">⚙️ Einstellungen</button>' + (O.phase === 'bereit' ? zurueck : '');
+  }
+  kt.innerHTML = karte; k.innerHTML = knoepfe;
+}
+async function olympStart() {
+  if (OLY.phase !== 'bereit') return;
+  const b = $('mStart'); if (b) b.disabled = true;
+  const r = await olympPost('start');
+  if (!r.ok) {
+    if (b) b.disabled = false;
+    if ($('olympKarte')) $('olympKarte').insertAdjacentHTML('beforeend', `<p class="mpFehler">${esc(r.d.fehler || 'Der Start ging nicht durch. Versuch es gleich nochmal.')}</p>`);
+    return;
+  }
+  OLY.phase = 'countdown';
+  $('menue').style.display = 'none'; $('hud').style.display = 'block'; $('olympZeit').hidden = false;
+  setz('olympZeitText', zeitText(OLY.einst.dauer * 1000));
+  const cd = $('countdown'); cd.style.display = 'flex';
+  let n = 3;
+  const tick = () => {
+    if (n > 0) { $('countdownZahl').textContent = n; $('countdownText').textContent = n === 3 ? 'Mach dich bereit' : n === 2 ? 'Angel in der Hand …' : 'Gleich geht’s los'; Ton.klick(); n--; setTimeout(tick, 1000); return; }
+    cd.style.display = 'none';
+    OLY.phase = 'laeuft'; OLY.start = Date.now(); OLY.gemeldet = {}; olympNeuRechnen(); olympMerken();
+    Ton.sieg(); starten(); ansage('LOS!', dauerText(OLY.einst.dauer) + ' – so viele Fische wie möglich', 2);
+  };
+  tick();
+}
+function olympTick() {
+  if (!OLY || OLY.phase !== 'laeuft') return;
+  const rest = OLY.start + OLY.einst.dauer * 1000 - Date.now();
+  const t = zeitText(rest);
+  setz('olympZeitText', t);
+  const el = $('olympRest'); if (el) el.textContent = t;
+  $('olympZeit').classList.toggle('knapp', rest <= 10000);
+  const m = [10, 30, 60].find(x => rest <= x * 1000);
+  if (m && !OLY.gemeldet[m]) {
+    OLY.gemeldet[m] = 1;
+    if (rest > 0 && rest > m * 1000 - 3000) { ansage(m + ' Sekunden!', '', 1.4); Ton.klick(); }
+  }
+  if (rest <= 0) olympEnde();
+}
+function olympEnde() {
+  if (!OLY || OLY.phase !== 'laeuft') return;
+  OLY.phase = 'fertig'; laeuft = false; In.haupt = false; angelAbbrechen();
+  if (document.pointerLockElement) document.exitPointerLock();
+  $('menue').style.display = 'none'; $('hinweis').style.display = 'none'; $('angel').style.display = 'none'; $('olympZeit').hidden = true;
+  olympNeuRechnen(); Ton.sieg();
+  olympErgebnisZeigen('wird');
+  olympSenden();
+}
+function olympErgebnisZeigen(zustand, d) {
+  d = d || {};
+  const bester = Object.keys(OLY.fang).filter(hatFisch).sort((a, b) => FF.FISCHE[b].wert - FF.FISCHE[a].wert)[0];
+  const punkte = zustand === 'ok' && Number.isFinite(d.punkte) ? d.punkte : S.geld;
+  const hinweis = zustand === 'wird' ? '<p class="unter">Wird an die Olympiade gemeldet …</p>'
+    : zustand === 'ok' ? '<p class="unter">✅ Eingetragen – in der Olympiade siehst du die Rangliste.</p>'
+    : `<p class="mpFehler">${esc(d.fehler || 'Das Ergebnis konnte nicht gemeldet werden.')}</p><div class="knoepfe" style="margin:0 0 10px"><button class="zweit" data-a="nochmal" style="flex:1">Nochmal senden</button></div>`;
+  fensterAuf(`<div class="ergebnis"><h2>🏁 Zeit abgelaufen!</h2><div class="label">Deine Wertung</div><div class="zahlgross">${geldText(punkte)}</div>${hinweis}
+    <div class="gitter stats" style="margin-bottom:14px">
+      <div class="karte"><div class="gross">🐟</div><b>${OLY.n}</b><span>Fische gefangen</span></div>
+      <div class="karte"><div class="gross">${bester ? fischIcon(FF.FISCHE[bester]) : '❔'}</div><b style="font-size:17px">${bester ? esc(FF.FISCHE[bester].name) : '–'}</b><span>bester Fang</span></div>
+      <div class="karte"><div class="gross">😵</div><b>${OLY.ohn}</b><span>Ohnmächte (−${OLY_STRAFE} $ je)</span></div>
+    </div>
+    <div class="knoepfe"><button class="gruen" data-a="zurueck" style="flex:1;font-size:19px;min-height:54px">↩ Zurück zur Olympiade</button></div>${zustand === 'ok' ? konfetti(36) : ''}</div>`);
+  knoepfeVerbinden({ zurueck:olympZurueck, nochmal:() => { olympErgebnisZeigen('wird'); olympSenden(); } });
+}
+async function olympSenden() {
+  const r = await olympPost('ergebnis', { fang:OLY.fang, ohn:OLY.ohn });
+  if (r.ok || (r.status === 409 && Number.isFinite(r.d.punkte))) { OLY.gesendet = true; olympErgebnisZeigen('ok', r.d); }
+  else olympErgebnisZeigen('fehler', r.d);
 }
 
 /* ================= Hauptschleife ================= */
@@ -1326,6 +1541,7 @@ function schleife(jetzt) {
   if (laeuft && !TEST.halt) schritt(dt);
   else if (N.imRaum && !TEST.halt) weltSchritt(dt);
   if (!TEST.halt) mehrspielerUpdate(dt);
+  if (OLY && !TEST.halt) olympTick();
   Welt.animieren(zeit, dt, kamera);
   if (ansageZeit > 0) { ansageZeit -= dt; if (ansageZeit <= 0) $('ansage').style.opacity = 0; }
   auaZeit = Math.max(0, auaZeit - dt); $('aua').style.opacity = auaZeit > 0 ? 1 : (S.hp < 30 && laeuft ? .35 : 0);
@@ -1353,16 +1569,22 @@ function weltSchritt(dt) {
   effekteUpdate(dt);
 }
 function angelHud() {
-  const a = $('angel');
+  const a = $('angel'), txt = $('angelText');
   if (handId !== 'rute' || A.zustand === 'bereit') {
-    if (handId === 'rute' && !naechsteStation) { a.style.display = 'block'; setz('angelText', istTouch ? 'AKTION halten zum Auswerfen' : 'Maustaste halten zum Auswerfen', 'innerHTML'); $('angelText').className = ''; $('angelText').style.fontSize = '17px'; $('ladung').style.display = 'none'; $('spannung').style.display = 'none'; setz('entf', 'Köder: ' + FF.KOEDER[S.aktivKoeder].name.replace(/ ×\d+/, '') + (S.aktivKoeder !== 'wurm' ? ' (' + S.koeder[S.aktivKoeder] + ')' : '')); }
-    else a.style.display = 'none';
+    if (handId === 'rute' && !naechsteStation) {
+      a.style.display = 'block'; a.className = 'klein';
+      setz('angelText', istTouch ? 'AKTION halten zum Auswerfen' : 'Maustaste halten zum Auswerfen', 'innerHTML'); txt.className = '';
+      $('ladung').style.display = 'none'; $('spannung').style.display = 'none'; $('distLeiste').style.display = 'none';
+      setz('entf', 'Köder: ' + FF.KOEDER[S.aktivKoeder].name.replace(/ ×\d+/, '') + (S.aktivKoeder !== 'wurm' ? ' (' + S.koeder[S.aktivKoeder] + ')' : ''));
+    } else a.style.display = 'none';
     return;
   }
-  a.style.display = 'block'; $('angelText').style.fontSize = '';
-  const txt = $('angelText');
+  a.style.display = 'block';
+  const zieht = A.zustand === 'drill' && A.lauf > 0;
+  a.className = zieht ? 'zieht' : '';
   $('ladung').style.display = A.zustand === 'laden' ? 'block' : 'none';
   $('spannung').style.display = A.zustand === 'drill' ? 'block' : 'none';
+  $('distLeiste').style.display = A.zustand === 'drill' ? 'block' : 'none';
   txt.className = A.zustand === 'biss' ? 'biss' : '';
   let t = '', e = '';
   if (A.zustand === 'laden') { t = 'Wurfkraft …'; $('ladung').firstElementChild.style.width = (A.ladung * 100) + '%'; e = Math.round(4 + A.ladung * (rute().wurf - 4)) + ' m'; }
@@ -1370,11 +1592,17 @@ function angelHud() {
   else if (A.zustand === 'warten') { t = 'Warten auf einen Biss …'; e = istTouch ? 'AKTION = einholen' : 'Klick = einholen'; }
   else if (A.zustand === 'biss') t = istTouch ? '! TIPPEN !' : '! KLICK !';
   else if (A.zustand === 'drill') {
-    const typ = FF.FISCHE[A.fisch];
-    t = A.lauf > 0 ? '<span style="color:#ff8a80">ER ZIEHT!</span>' : (In.haupt ? 'Einholen …' : 'Halten zum Einholen');
+    const typ = FF.FISCHE[A.fisch], ru = rute();
+    t = zieht ? '<span style="color:#ff9d94">ER ZIEHT! Loslassen!</span>' : (In.haupt ? 'Einholen …' : 'Halten zum Einholen');
     if (typ.boss) t = '👑 ' + t;
-    $('spannung').firstElementChild.style.width = (Math.min(1, A.spann) * 100) + '%';
-    e = Math.max(0, A.dist).toFixed(1) + ' m · Schnurspannung';
+    const sp = Math.min(1, A.spann), spEl = $('spannung');
+    spEl.firstElementChild.style.width = (sp * 100) + '%';
+    spEl.firstElementChild.style.backgroundSize = sp > .02 ? (100 / sp) + '% 100%' : '100% 100%';
+    spEl.classList.toggle('heiss', sp > .85);
+    // Wie weit ist der Fisch noch? links = entkommt, rechts = an Land
+    const total = ru.wurf + 10 - 2.3, nah = klemm((ru.wurf + 10 - A.dist) / total, 0, 1), dl = $('distLeiste').firstElementChild;
+    dl.style.width = (nah * 100) + '%'; dl.style.backgroundSize = nah > .02 ? (100 / nah) + '% 100%' : '100% 100%';
+    e = Math.max(0, A.dist).toFixed(1).replace('.', ',') + ' m bis an Land · Spannung ' + Math.round(sp * 100) + ' %';
   } else if (A.zustand === 'land') { t = 'Auf Land gelandet'; e = istTouch ? 'AKTION = einholen' : 'Klick = einholen'; }
   setz('angelText', t, 'innerHTML'); setz('entf', e);
 }
@@ -1414,8 +1642,8 @@ function trefferAuf(v, n, richtung, kraft) {
 function namensSchild(text, farbe) {
   const cv = document.createElement('canvas'); cv.width = 512; cv.height = 112;
   const c = cv.getContext('2d');
-  let gr = 64; c.font = `800 ${gr}px Barlow, sans-serif`;
-  while (c.measureText(text).width > 460 && gr > 20) { gr -= 4; c.font = `800 ${gr}px Barlow, sans-serif`; }
+  let gr = 64; c.font = `800 ${gr}px "Bricolage Grotesque", sans-serif`;
+  while (c.measureText(text).width > 460 && gr > 20) { gr -= 4; c.font = `800 ${gr}px "Bricolage Grotesque", sans-serif`; }
   const b = Math.min(504, c.measureText(text).width + 44);
   c.fillStyle = 'rgba(6,24,40,.75)'; c.fillRect((512 - b) / 2, 8, b, 96);
   c.fillStyle = farbe; c.fillRect((512 - b) / 2, 96, b, 8);
@@ -1731,19 +1959,28 @@ function mehrspielerOeffnen(art) {
 }
 
 /* ================= Start ================= */
-W = Welt.bauen(szene, S.insel, S);
-inselLicht();
-sonne.castShadow = E.grafik === 'hoch';
-spawnen();
-handBauen(); hotbarZeichnen();
-kameraSetzen(0);
-menue('start');
-requestAnimationFrame(schleife);
+// Erst die Schrift laden, damit die Schilder in der Welt (Canvas-Texturen) schon mit ihr gemalt werden
+function boot() {
+  if (boot.fertig) return; boot.fertig = true;
+  W = Welt.bauen(szene, S.insel, S);
+  inselLicht();
+  sonne.castShadow = E.grafik === 'hoch';
+  spawnen();
+  handBauen(); hotbarZeichnen();
+  kameraSetzen(0);
+  if (OLY) { document.body.classList.add('oly'); $('kiste').previousElementSibling.textContent = '🐟'; $('kiste').parentElement.title = 'Gefangene Fische'; $('olympZeit').hidden = true; }
+  menue('start');
+  requestAnimationFrame(schleife);
+  if (OLY) olympInfo();
+}
+try {
+  Promise.race([document.fonts.load('800 24px "Bricolage Grotesque"'), new Promise(ok => setTimeout(ok, 1500))]).then(boot, boot);
+} catch (e) { boot(); }
 
 // Zum Testen in der Konsole
 window.fischfieber = {
   TEST,
-  get S() { return S; }, get laeuft() { return laeuft; }, P, A, V, In, W:() => W, FREMDE, FREMDV, trefferAuf, explosion,
+  get S() { return S; }, get OLY() { return OLY; }, get laeuft() { return laeuft; }, P, A, V, In, W:() => W, FREMDE, FREMDV, trefferAuf, explosion,
   geld(n) { S.geld += n; merken(); },
   // misst ms pro Bild (wartet per readPixels, bis die Grafikkarte fertig ist)
   renderZeit(n = 30) {
@@ -1757,6 +1994,6 @@ window.fischfieber = {
   grafik(stufe) { E.grafik = stufe; grafikAnwenden(); sonne.castShadow = stufe === 'hoch'; szene.traverse(o => { if (o.material) o.material.needsUpdate = true; }); },
   fang(id) { A.fisch = id; A.pose.position.copy(P.pos).add(new T.Vector3(0, 0, 8)); rausziehen(); },
   sim(sek, schrittweite = 1 / 60) { for (let t = 0; t < sek; t += schrittweite) { zeit += schrittweite; schritt(schrittweite); Welt.animieren(zeit, schrittweite, kamera); } },
-  starten() { $('menue').style.display = 'none'; $('fenster').style.display = 'none'; panelOffen = false; laeuft = true; $('hud').style.display = 'block'; },
+  starten() { $('menue').style.display = 'none'; $('fenster').style.display = 'none'; panelOffen = false; laeuft = true; $('hud').style.display = 'block'; $('touch').style.visibility = ''; },
 };
 })();

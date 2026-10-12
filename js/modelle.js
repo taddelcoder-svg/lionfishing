@@ -39,8 +39,8 @@ FF.Modelle = (() => {
     c.fillStyle = farbe; c.fillRect(0, 0, cv.width, cv.height);
     c.strokeStyle = 'rgba(0,0,0,.35)'; c.lineWidth = 10; c.strokeRect(5, 5, cv.width - 10, cv.height - 10);
     c.fillStyle = schrift; c.textAlign = 'center'; c.textBaseline = 'middle';
-    let gr = cv.height * .55; c.font = `800 ${gr}px Barlow, sans-serif`;
-    while (c.measureText(text).width > cv.width * .9) { gr *= .92; c.font = `800 ${gr}px Barlow, sans-serif`; }
+    let gr = cv.height * .55; c.font = `800 ${gr}px "Bricolage Grotesque", sans-serif`;
+    while (c.measureText(text).width > cv.width * .9) { gr *= .92; c.font = `800 ${gr}px "Bricolage Grotesque", sans-serif`; }
     c.fillText(text, cv.width / 2, cv.height / 2 + 4);
     const tex = new T.CanvasTexture(cv);
     return mesh(new T.PlaneGeometry(breite, hoehe), new T.MeshBasicMaterial({ map:tex, side:T.DoubleSide }), false);
