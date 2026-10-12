@@ -1,6 +1,8 @@
 'use strict';
 // Fischfieber – Server: liefert die Dateien aus und verbindet Mitspieler (WebSocket unter /ws).
 // Das ganze Spiel läuft im Browser, der Spielstand liegt im localStorage des Spielers.
+// Als Disziplin der Olympiade (Angelturnier) kommt man per Ticket (?olymp=…) herein; der Browser meldet sich
+// über /api/olymp, der Server rechnet die Punkte selbst aus und gibt sie signiert weiter (olymp.js, olymp-logik.js).
 // Der Server merkt sich nichts dauerhaft: Er hält nur die offenen Runden im Arbeitsspeicher
 // und reicht die Nachrichten zwischen den Spielern einer Runde weiter.
 const http = require('http');
@@ -9,6 +11,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const zugang = require('./zugang')({ titel:'Fischfieber' });
+const olymp = require('./olymp')({ spiel:'fischfieber' });
+const olympLogik = require('./olymp-logik').erstelleAnfrage({ olymp });
 
 const PORT = Number(process.env.PORT) || 10900;
 
@@ -26,12 +30,30 @@ function senden(res, datei, cache) {
   });
 }
 
+// Olympia-Meldungen: geschützt durch das signierte Ticket, nicht durch das Passwort-Cookie
+function olympAnfrage(req, res) {
+  let d = '';
+  req.on('data', c => { d += c; if (d.length > 8000) req.destroy(); });
+  req.on('end', () => {
+    const antwort = (status, daten) => { res.writeHead(status, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store' }); res.end(JSON.stringify(daten)); };
+    let m;
+    try { m = JSON.parse(d); } catch (_) { return antwort(400, { ok:false, fehler:'Anfrage kaputt' }); }
+    if (!m || typeof m !== 'object') return antwort(400, { ok:false, fehler:'Anfrage kaputt' });
+    try { const r = olympLogik.anfrage(m); antwort(r.status, r.daten); } catch (e) { antwort(500, { ok:false, fehler:'Serverfehler' }); }
+  });
+  req.on('error', () => { try { res.writeHead(400); res.end(); } catch (_) { /* weg */ } });
+}
+
 const server = http.createServer((req, res) => {
   let url;
   try { url = new URL(req.url, 'http://x'); } catch (_) { res.writeHead(400); return res.end(); }
   if (url.pathname === '/healthz') { res.writeHead(200, { 'Content-Type':'application/json' }); return res.end('{"ok":true}'); }
   if (url.pathname === '/datenschutz' || url.pathname === '/datenschutz.html') return senden(res, path.join(__dirname, 'datenschutz.html'), 'no-cache');
-  // Passwort für Familie und Freunde (zugang.js)
+  if (url.pathname === '/api/olymp') {
+    if (req.method !== 'POST') { res.writeHead(405, { 'Content-Type':'text/plain; charset=utf-8', Allow:'POST' }); return res.end('Nicht erlaubt'); }
+    return olympAnfrage(req, res);
+  }
+  // Passwort für Familie und Freunde; ein gültiges Olympia-Ticket im Link ersetzt es (zugang.js)
   if (zugang.pruefen(req, res)) return;
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { 'Content-Type':'text/plain; charset=utf-8', Allow:'GET, HEAD' }); return res.end('Nicht erlaubt'); }
   if (SEITEN[url.pathname]) return senden(res, path.join(__dirname, SEITEN[url.pathname]), 'no-cache');

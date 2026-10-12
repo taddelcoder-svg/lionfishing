@@ -5,7 +5,8 @@
   "description": "Fischfieber – 3D-Chaos-Angeln im Browser: gestrandet auf einer Insel, angeln, kämpfen, zocken, heimkehren",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test/olymp-test.js"
   },
   "engines": {
     "node": ">=18"
