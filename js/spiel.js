@@ -1,7 +1,7 @@
 'use strict';
 // Fischfieber – Spiellogik: Spieler, Angeln, Viecher, Waffen, Bosse, Shop, Casino, Speichern.
 (() => {
-const T = THREE, Welt = FF.Welt, M = FF.Modelle, Ton = FF.Ton;
+const T = THREE, Welt = FF.Welt, M = FF.Modelle, Ton = FF.Ton, Teil = FF.Teilchen;
 const $ = id => document.getElementById(id);
 const zufall = (a, b) => a + Math.random() * (b - a);
 const klemm = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -62,11 +62,12 @@ function grafikAnwenden() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, PIXEL[E.grafik] || 1));
   renderer.shadowMap.enabled = E.grafik === 'hoch';
   renderer.setSize(innerWidth, innerHeight, false);
-  Welt.setQualitaet(E.grafik);
+  Welt.setQualitaet(E.grafik); Teil.setQualitaet(E.grafik);
 }
 renderer.shadowMap.type = T.PCFSoftShadowMap;
 grafikAnwenden();
 const szene = new T.Scene();
+Teil.init(szene);
 const kamera = new T.PerspectiveCamera(72, innerWidth / innerHeight, .05, 900);
 kamera.rotation.order = 'YXZ';
 szene.add(kamera);
@@ -76,8 +77,9 @@ function inselLicht() {
   const I = FF.INSELN[S.insel];
   sonnenDir = Welt.sonnenRichtung();
   sonne.color.set(I.sonne); hemi.color.set(I.hemi || '#ffffff'); hemi.groundColor.set(I.hemiBoden || '#6b5a3a');
-  sonne.intensity = S.insel === 2 ? .85 : .95; hemi.intensity = S.insel === 2 ? .82 : .64;
+  sonne.intensity = lichtBasis.sonne = S.insel === 2 ? .85 : .95; hemi.intensity = lichtBasis.hemi = S.insel === 2 ? .82 : .64;
 }
+const lichtBasis = { sonne:.95, hemi:.64 };   // Regenwolken dämpfen das Licht (siehe Welt.animieren)
 const sonne = new T.DirectionalLight('#fff4dc', .95);
 sonne.castShadow = true; sonne.shadow.mapSize.set(2048, 2048);
 Object.assign(sonne.shadow.camera, { left:-40, right:40, top:40, bottom:-40, near:1, far:160 });
@@ -102,7 +104,7 @@ const tasten = new Set();
 let laeuft = false, panelOffen = false, zeit = 0;
 let W = null;
 const V = [];          // Viecher (lebend und erledigt)
-const GESCHOSSE = [], TNTS = [], TEILCHEN = [], STRICHE = [], WELLEN = [], ZAHLEN = [];
+const GESCHOSSE = [], TNTS = [], STRICHE = [], WELLEN = [], ZAHLEN = [];
 
 /* ================= Angeln ================= */
 const A = { zustand:'bereit', ladung:0, pose:M.pose(), vel:new T.Vector3(), timer:0, fisch:null, dist:0, spann:0, lauf:0, pause:2, richtung:new T.Vector3(), seite:new T.Vector3(), boss:false };
@@ -188,26 +190,39 @@ function hudAktualisieren() {
 }
 
 /* ================= Teilchen & Effekte ================= */
-const tGeo = new T.BoxGeometry(1, 1, 1), tMat = {};
-const basis = f => tMat[f] || (tMat[f] = new T.MeshBasicMaterial({ color:f }));
+const HOCH = new T.Vector3(0, 1, 0);
+// Altes Teilchen-Kürzel: bunte Splitter/Tropfen (jetzt weiche Sprites in einem einzigen Zeichenaufruf)
 function teilchen(pos, farbe, n, kraft = 3, gr = .08, leben = .7, schwer = 1) {
-  for (let i = 0; i < n; i++) {
-    const m = new T.Mesh(tGeo, basis(farbe)); m.scale.setScalar(gr * zufall(.6, 1.3)); m.position.copy(pos);
-    szene.add(m);
-    TEILCHEN.push({ m, v:new T.Vector3(zufall(-1, 1), zufall(.3, 1.4), zufall(-1, 1)).multiplyScalar(kraft), leben:leben * zufall(.6, 1.2), schwer });
-  }
-  while (TEILCHEN.length > 450) szene.remove(TEILCHEN.shift().m);
+  Teil.hart(pos, farbe, n, { kraft, gr:gr * 1.35, leben, schwer });
 }
+function staub(pos, farbe, n, gr = .35) { Teil.weich(pos, farbe, n, { kraft:1.3, gr, wachs:2.4, leben:.55, schwer:-.1, alpha:.55, drag:2.5, flach:true }); }
 function platsch(pos, staerke = 1) {
   const p = pos.clone(); p.y = Welt.welle(p.x, p.z, zeit);
   welleRing(p, staerke * 1.2, 1.1);
   if (staerke > .9) setTimeout(() => welleRing(p, staerke * .8, 1), 160);
-  teilchen(p, '#ffffff', Math.round(10 * staerke), 3 * staerke, .1, .7);
-  teilchen(p, '#9fd8ff', Math.round(8 * staerke), 2.5 * staerke, .08, .6);
+  // Wasserkrone: Tropfen schießen hoch und fallen als Ring zurück, dazu ein weicher Gischtnebel
+  Teil.hart(p, '#ffffff', Math.round(14 * staerke), { kraft:3.8 * staerke, gr:.1, leben:.85, richtung:HOCH, streu:.5 });
+  Teil.hart(p, '#bfe6ff', Math.round(10 * staerke), { kraft:2.8 * staerke, gr:.075, leben:.75, richtung:HOCH, streu:1 });
+  Teil.weich(p, '#ffffff', 3 + Math.round(2 * staerke), { kraft:1.2 * staerke, gr:.5 * Math.min(2, staerke), wachs:2.3, leben:.9, schwer:-.05, alpha:.5, drag:2.2, flach:true });
 }
-const RINGE = [], ringGeo = new T.RingGeometry(.82, 1, 40); ringGeo.rotateX(-Math.PI / 2);
+// Treffer auf ein Viech: Funken, kurzer Lichtblitz, Schuppen/Splitter in den Fischfarben
+function trefferFX(v, stark) {
+  const p = v.pos, f1 = v.typ.f1, f2 = v.typ.f2, g = Math.max(.3, v.r * 2);
+  Teil.glut(p, '#ffe9a0', stark ? 14 : 8, { kraft:stark ? 6 : 4, gr:.07, leben:.4, schwer:.45, drag:1 });
+  Teil.glut(p, '#fff6d0', 1, { kraft:0, gr:g * (stark ? 1.8 : 1.1), wachs:.35, leben:.16 });
+  Teil.hart(p, f1, stark ? 14 : 6, { kraft:stark ? 4.5 : 3, gr:.085, leben:.6 });
+  Teil.hart(p, f2, stark ? 8 : 4, { kraft:stark ? 3.5 : 2.4, gr:.07, leben:.55 });
+}
+const RINGE = [], ringGeo = new T.RingGeometry(.7, 1, 40); ringGeo.rotateX(-Math.PI / 2);
+const ringAlpha = (() => {   // weicher Rand statt harter Linie
+  const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d');
+  const gr = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, '#000'); gr.addColorStop(.62, '#000'); gr.addColorStop(.8, '#fff'); gr.addColorStop(.9, '#aaa'); gr.addColorStop(1, '#000');
+  x.fillStyle = gr; x.fillRect(0, 0, 128, 128);
+  return new T.CanvasTexture(c);
+})();
 function welleRing(pos, groesse = 1, dauer = 1.2) {
-  const m = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color:'#ffffff', transparent:true, opacity:.7, depthWrite:false }));
+  const m = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color:'#ffffff', alphaMap:ringAlpha, transparent:true, opacity:.7, depthWrite:false }));
   m.position.set(pos.x, Welt.welle(pos.x, pos.z, zeit) + .03, pos.z); m.scale.setScalar(.1); m.renderOrder = 2;
   szene.add(m); RINGE.push({ m, groesse, dauer, t:0 });
   while (RINGE.length > 40) { const r = RINGE.shift(); szene.remove(r.m); r.m.material.dispose(); }
@@ -364,7 +379,7 @@ function spielerUpdate(dt) {
       P.schrittT = P.sprintet ? .26 : .38;
       const fuss = P.pos.clone();
       if (P.imWasser) { fuss.y = Welt.welle(fuss.x, fuss.z, zeit); welleRing(fuss, .7, 1); teilchen(fuss, '#ffffff', 3, 1.4, .06, .4); }
-      else if (gb < 1.2 && gb > 0) teilchen(fuss.setY(gb + .05), '#e8d6a0', P.sprintet ? 4 : 2, 1.1, .06, .45);
+      else if (gb < 1.2 && gb > 0) staub(fuss.setY(gb + .05), '#e8d6a0', P.sprintet ? 3 : 2, .3);
     }
   }
   P.ruhe += dt;
@@ -569,6 +584,7 @@ function viehSpawnen(id, pos, vel) {
 function viehWeg(v) {
   const i = V.indexOf(v); if (i < 0) return;
   szene.remove(v.m); if (v.leuchten) szene.remove(v.leuchten);
+  v.m.traverse(o => { if (o.isMesh && o.geometry) o.geometry.dispose(); });
   V.splice(i, 1);
 }
 function zumWasser(p) { const d = new T.Vector3(p.x, 0, p.z); return d.lengthSq() < 1e-4 ? d.set(1, 0, 0) : d.normalize(); }
@@ -604,7 +620,7 @@ function viehUpdate(v, dt) {
   if (v.pos.y - v.r <= gb) {
     v.pos.y = gb + v.r;
     if (v.vel.y < -3) v.vel.y = -v.vel.y * .3; else v.vel.y = 0;
-    if (!v.amBoden && v.flug && !v.tot) { v.flug = false; teilchen(v.pos, '#e8d6a0', 6, 2, .07, .5); if (typ.verh === 'muell') sterben(v, true); }
+    if (!v.amBoden && v.flug && !v.tot) { v.flug = false; staub(v.pos, '#e8d6a0', 4, .4); teilchen(v.pos, '#e8d6a0', 4, 2, .06, .5); if (typ.verh === 'muell') sterben(v, true); }
     v.amBoden = true;
     const reib = Math.exp(-(v.tot ? 8 : (typ.verh === 'krebs' ? 0 : 5)) * dt);
     v.vel.x *= reib; v.vel.z *= reib;
@@ -615,7 +631,7 @@ function viehUpdate(v, dt) {
     if (v.leben <= 0) { viehWeg(v); return; }
     v.m.position.set(v.pos.x, v.pos.y + Math.sin(zeit * 3 + v.t) * .05 + (AUFRECHT[typ.form] && typ.form !== 'kugel' ? -v.r : 0), v.pos.z);
     v.m.rotation.set(Math.PI * .5 * v.rollSeite + (typ.form === 'kugel' ? Math.PI * .5 : 0), v.gieren + zeit * .5, 0);
-    if (Math.random() < dt * 2) teilchen(v.pos.clone().add(new T.Vector3(0, v.r, 0)), typ.boss ? '#ffcc33' : '#fff7c0', 1, .5, .05, .6, -.2);
+    if (Math.random() < dt * 2) Teil.glut(v.pos.clone().add(new T.Vector3(zufall(-v.r, v.r), v.r, zufall(-v.r, v.r))), typ.boss ? '#ffcc33' : '#fff7c0', 1, { kraft:.5, gr:typ.boss ? .16 : .1, leben:.8, schwer:-.2 });
     if (v.leuchten) {
       v.leuchten.position.set(v.pos.x, Welt.boden(v.pos.x, v.pos.z) + .04, v.pos.z);
       v.leuchten.userData.ring.material.opacity = .4 + Math.sin(zeit * 4 + v.t) * .2;
@@ -658,7 +674,7 @@ function viehUpdate(v, dt) {
         break;
       case 'zitter':
         huepf(wasserJitter(), 1.3, 2.2, 1.1);
-        if (sp.l < 2.8 && v.cd <= 0) { v.cd = 1.3; Ton.zap(); teilchen(v.pos, '#8fe8ff', 14, 4, .06, .3, 0); spielerTreffen(sp, typ.sch); }
+        if (sp.l < 2.8 && v.cd <= 0) { v.cd = 1.3; Ton.zap(); Teil.glut(v.pos, '#8fe8ff', 18, { kraft:4.5, gr:.09, leben:.3, schwer:0 }); Teil.glut(v.pos, '#c8f6ff', 1, { kraft:0, gr:v.r * 3, wachs:.4, leben:.14 }); spielerTreffen(sp, typ.sch); }
         break;
       case 'ramme':
         if (v.cd <= 0 && sp.l < 16) { v.cd = 2.6; v.rammen = .7; v.vel.set(sp.d.x * 12, 2.5, sp.d.z * 12); v.spin = 0; }
@@ -722,7 +738,7 @@ function viehSchaden(v, n, richtung, kraft) {
   if (v.tot) return;
   v.hp -= n; v.treffer = 1;
   zahl(v.pos.clone().add(new T.Vector3(0, v.r + .3, 0)), Math.round(n), v.typ.boss ? '#ffb3ad' : '#fff');
-  teilchen(v.pos, v.typ.f1, 5, 2.5, .06, .4);
+  trefferFX(v, false);
   if (richtung) { const k = (kraft || 3) / (v.typ.boss ? 6 : 1); v.vel.x += richtung.x * k; v.vel.z += richtung.z * k; v.vel.y += k * .5; }
   Ton.treffer();
   if (v.hp <= 0) sterben(v);
@@ -730,7 +746,7 @@ function viehSchaden(v, n, richtung, kraft) {
 function sterben(v, still) {
   v.tot = true; v.hp = 0; v.flug = false;
   if (!v.leuchten) beuteLeuchten(v);
-  if (!still) { teilchen(v.pos, '#ffffff', 10, 3, .08, .6); teilchen(v.pos, v.typ.f1, 10, 3.5, .1, .7); }
+  if (!still) trefferFX(v, true);
   if (v.typ.boss) {
     S.stats.bosse++; Ton.sieg(); ansage('BOSS BESIEGT!', `${v.typ.name} ist erledigt – sammel die Trophäe ein!`, 4); wackeln(1); merken();
   }
@@ -796,7 +812,12 @@ function druckwelle(pos, radius, sch, vonNetz) {
 }
 // opt.tnt: vom Spieler geworfen · opt.fremd: Explosion eines Mitspielers (dessen Rechner hat die Fische schon getroffen)
 function explosion(pos, radius, sch, quelle, opt = {}) {
-  teilchen(pos, '#ffb347', 24, 7, .16, .6); teilchen(pos, '#ff5a1f', 16, 5, .14, .5); teilchen(pos, '#555555', 14, 3, .25, 1.1, -.3);
+  Teil.glut(pos, '#fff0b8', 1, { kraft:0, gr:radius * .8, wachs:1.4, leben:.28, alpha:.85 });
+  Teil.glut(pos, '#ffb347', 30, { kraft:8, gr:.5, wachs:.3, leben:.55, schwer:.15, drag:2.2 });
+  Teil.glut(pos, '#ff5a1f', 18, { kraft:5.5, gr:.5, wachs:.4, leben:.6, schwer:-.1, drag:2 });
+  Teil.glut(pos, '#ffe066', 16, { kraft:9, gr:.07, leben:.7, schwer:.5, drag:.6 });
+  Teil.weich(pos, '#3c3a3a', 16, { kraft:3, gr:.9, wachs:2.8, leben:1.7, schwer:-.2, alpha:.75, drag:1.3 });
+  teilchen(pos, '#6b5a3a', 12, 6, .1, .8);
   Ton.explosion(); wackeln(Math.max(0, 1.2 - P.pos.distanceTo(pos) / 20));
   if (!opt.fremd) {
     netzEffekt({ art:'expl', p:vekListe(pos), r:radius, sch, tnt:!!opt.tnt });
@@ -828,7 +849,7 @@ function einschlag(o, d, max) {
     const g = Welt.boden(x, z);
     if (y <= Math.max(g, 0)) {
       const p = new T.Vector3(x, Math.max(g, 0), z);
-      if (g < 0) platsch(p, .35); else teilchen(p, '#d9c08a', 4, 1.5, .05, .4);
+      if (g < 0) platsch(p, .35); else { staub(p, '#d9c08a', 2, .35); teilchen(p, '#d9c08a', 4, 1.5, .05, .4); }
       return p;
     }
   }
@@ -885,7 +906,7 @@ function waffeUpdate(dt) {
     } else { schuss(f, w, w.sch); id === 'harpune' ? Ton.harpune() : Ton.schuss(); wackeln(id === 'harpune' ? .3 : .12); }
     netzEffekt({ art:'schuss', w:id, l:schussLinien.splice(0) });
     const m = new T.Vector3(); (hand.userData.muendung || hand).getWorldPosition(m);
-    teilchen(m, '#ffe066', 4, 1.2, .05, .12, 0);
+    Teil.glut(m, '#ffd98a', 1, { kraft:0, gr:id === 'flinte' ? .6 : .38, wachs:.4, leben:.07 }); Teil.glut(m, '#ffe066', 6, { kraft:4, gr:.05, leben:.18, schwer:.3, richtung:f, streu:.5 }); Teil.weich(m, '#cfcfcf', 2, { kraft:.8, gr:.16, wachs:3, leben:.55, schwer:-.1, alpha:.4, drag:2, richtung:f, streu:.5 });
     if (P.mag[id] <= 0) setTimeout(() => { if (handId === id && P.mag[id] <= 0) nachladen(); }, 250);
   } else if (w.art === 'wurf') {
     if (S.tnt <= 0) return;
@@ -934,7 +955,7 @@ function effekteUpdate(dt) {
     if (g < -.3 && t.pos.y < .1) { t.vel.multiplyScalar(.9); }
     t.m.position.copy(t.pos); t.m.rotation.x += t.dreh * dt; t.m.rotation.z += t.dreh * .7 * dt;
     t.m.userData.funke.visible = Math.sin(zeit * 30) > 0;
-    if (Math.random() < dt * 20) teilchen(t.pos.clone().add(new T.Vector3(0, .2, 0)), '#ffcc33', 1, .8, .03, .25, 0);
+    if (Math.random() < dt * 30) Teil.glut(t.pos.clone().add(new T.Vector3(0, .26, 0)), '#ffb52e', 1, { kraft:1.2, gr:.07, leben:.3, schwer:.3 });
     if (t.zuender <= 0) {
       szene.remove(t.m); TNTS.splice(i, 1);
       // TNT eines Mitspielers: den Knall schickt dessen Rechner
@@ -947,12 +968,6 @@ function effekteUpdate(dt) {
     r.m.scale.setScalar(.15 + k * 1.6 * r.groesse); r.m.material.opacity = .7 * (1 - k);
     r.m.position.y = Welt.welle(r.m.position.x, r.m.position.z, zeit) + .03;
     if (k >= 1) { szene.remove(r.m); r.m.material.dispose(); RINGE.splice(i, 1); }
-  }
-  for (let i = TEILCHEN.length - 1; i >= 0; i--) {
-    const p = TEILCHEN[i];
-    p.leben -= dt; p.v.y -= 12 * p.schwer * dt; p.m.position.addScaledVector(p.v, dt);
-    p.m.rotation.x += dt * 5; p.m.rotation.y += dt * 4;
-    if (p.leben <= 0) { szene.remove(p.m); TEILCHEN.splice(i, 1); }
   }
   for (let i = STRICHE.length - 1; i >= 0; i--) {
     const s = STRICHE[i]; s.leben -= dt;
@@ -1543,6 +1558,8 @@ function schleife(jetzt) {
   if (!TEST.halt) mehrspielerUpdate(dt);
   if (OLY && !TEST.halt) olympTick();
   Welt.animieren(zeit, dt, kamera);
+  Teil.update(dt, kamera, cv.height);
+  if (W && W.licht != null) { sonne.intensity = lichtBasis.sonne * (1 - (1 - W.licht) * 1.0); hemi.intensity = lichtBasis.hemi * (1 - (1 - W.licht) * .45); }
   if (ansageZeit > 0) { ansageZeit -= dt; if (ansageZeit <= 0) $('ansage').style.opacity = 0; }
   auaZeit = Math.max(0, auaZeit - dt); $('aua').style.opacity = auaZeit > 0 ? 1 : (S.hp < 30 && laeuft ? .35 : 0);
   renderer.render(szene, kamera);
@@ -1634,7 +1651,7 @@ function trefferAuf(v, n, richtung, kraft) {
   N.senden({ t:'treffer', an:v.besitzer, n:v.n, sch:r2(n), rx:richtung ? r2(richtung.x) : 0, rz:richtung ? r2(richtung.z) : 0, k:kraft || 0 });
   v.treffer = 1;
   zahl(v.pos.clone().add(new T.Vector3(0, v.r + .3, 0)), Math.round(n), v.typ.boss ? '#ffb3ad' : '#fff');
-  teilchen(v.pos, v.typ.f1, 5, 2.5, .06, .4);
+  trefferFX(v, false);
   Ton.treffer();
 }
 
@@ -1733,6 +1750,7 @@ function fremdeViecherSetzen(f, liste) {
 }
 function fremdesViehWeg(k, v) {
   szene.remove(v.m); if (v.leuchten) szene.remove(v.leuchten);
+  v.m.traverse(o => { if (o.isMesh && o.geometry) o.geometry.dispose(); });
   FREMDV.delete(k);
 }
 function fremdesViehAnimieren(v, dt) {
@@ -1980,6 +1998,10 @@ try {
 // Zum Testen in der Konsole
 window.fischfieber = {
   TEST,
+  wetter:(z, sofort) => Welt.wetterSetzen(z, sofort),
+  info() { renderer.render(szene, kamera); const r = renderer.info.render; return { aufrufe:r.calls, dreiecke:r.triangles }; },
+  viech(id, x, z) { return viehSpawnen(id, new T.Vector3(x, Welt.boden(x, z) + .3, z), new T.Vector3()); },
+  effekt: { platsch, trefferFX, explosion, staub },
   get S() { return S; }, get OLY() { return OLY; }, get laeuft() { return laeuft; }, P, A, V, In, W:() => W, FREMDE, FREMDV, trefferAuf, explosion,
   geld(n) { S.geld += n; merken(); },
   // misst ms pro Bild (wartet per readPixels, bis die Grafikkarte fertig ist)

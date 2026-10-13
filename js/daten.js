@@ -40,6 +40,8 @@ FF.FISCHE = {
   admiral:     { name:'Admiral Hammer',insel:2,wert:0,   hp:1300,gr:3.2, kraft:5,   w:0,  verh:'boss_hai',    sch:20, form:'hai',   f1:'#5d6b78', f2:'#e6ebef', s:6, boss:true, hammer:true, trophae:'hammer' },
 };
 
+for (const k in FF.FISCHE) FF.FISCHE[k].id = k;   // Kennung für Aussehen (Muster) pro Art
+
 /* ---------- Angeln ----------
    zug = Einholtempo (m/s), wurf = maximale Wurfweite, spann = wie schnell die Schnur spannt (kleiner = besser),
    kraft = bis zu welcher Fischkraft die Rute locker hält */
