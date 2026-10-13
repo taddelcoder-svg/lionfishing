@@ -22,8 +22,9 @@ Einzige Abhängigkeit ist `ws` für das Spielen mit Freunden. Lokal ohne `ZUGANG
 |---|---|
 | `server.js` | liefert die Dateien aus, Passwortschutz über `zugang.js`, Runden für das Spielen mit Freunden (WebSocket `/ws`) |
 | `js/daten.js` | Tabellen: Fische, Ruten, Köder, Waffen, Westen, Inseln, Casino |
-| `js/modelle.js` | alle 3D-Modelle prozedural (three.js r128, flache Schattierung) |
-| `js/welt.js` | Insel: Höhenfunktion, Wasser mit Wellen, Himmel, Steg, Buden, Leute |
+| `js/modelle.js` | alle 3D-Modelle prozedural (three.js r128): Fische mit Mustern, Waffen, Ruten, Buden, Steg, Boote, Palmen |
+| `js/teilchen.js` | Teilchen (Gischt, Funken, Rauch) als weiche Sprites in drei Zeichenaufrufen |
+| `js/welt.js` | Insel: Höhenfunktion, Wasser (Verlauf, Schaum, Spiegelung), Himmel mit Wolken, Wetter (nur Optik), Vegetation |
 | `js/spiel.js` | Spieler, Angeln (Wurf, Biss, Drill), Viecher-KI, Waffen, Bosse, Shop, Casino, Speichern, Mehrspieler |
 | `js/netz.js` | Verbindung zum Server: Runden eröffnen/beitreten, Nachrichten senden und empfangen |
 | `js/ton.js` | synthetische Geräusche (WebAudio), abschaltbar |
