@@ -496,6 +496,14 @@
 </script>
 
 <!-- Rangliste der Spielesammlung: meldet Spielzeit, Punkte und Progress -->
+<script>
+window.SLZaehle=function(k,f){try{var s=JSON.parse(localStorage.getItem(k))||{};f(s);localStorage.setItem(k,JSON.stringify(s))}catch(e){}};
+window.SLRangAdapter=function(){
+  var s={};try{s=JSON.parse(localStorage.getItem('fischfieber.v1'))||{}}catch(e){}
+  var q=Object.keys(s.quests||{}).filter(function(k){return s.quests[k]}).length;
+  return{punkte:+((s.stats||{}).verdient)||0,progress:s.ende?100:Math.min(95,q*45)}
+};
+</script>
 <script src="https://rangliste-aoee.onrender.com/melder.js" data-spiel="Fischfieber" defer></script>
 </body>
 </html>
